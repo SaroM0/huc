@@ -1,0 +1,44 @@
+id: bio-101-midterm-1
+title: Biology 101 — Midterm 1
+course: BIO-101
+rubric_version: 1
+questions:
+  - id: q1
+    number: "1"
+    type: multiple_choice
+    prompt: "Which organelle produces ATP? A) Ribosome B) Mitochondrion C) Nucleus D) Lysosome"
+    correct_option: B
+    criteria:
+      - id: correct
+        description: Selects the correct option
+        max_points: 1
+
+  - id: q2
+    number: "2"
+    type: short_answer
+    prompt: Explain the difference between mitosis and meiosis.
+    reference_answer: >
+      Mitosis produces two genetically identical diploid daughter cells
+      (growth and repair). Meiosis produces four genetically distinct haploid
+      cells (gametes), with recombination during prophase I.
+    criteria:
+      - id: products
+        description: States the number and ploidy of the resulting cells for each process
+        max_points: 2
+        levels:
+          "2": Both processes correct (number and ploidy)
+          "1": Only one correct, or ploidy missing
+          "0": Incorrect or missing
+      - id: purpose
+        description: Explains the biological role of each process
+        max_points: 2
+        levels:
+          "2": Role of both processes explained correctly
+          "1": Only one role, or a vague explanation
+          "0": Missing
+      - id: variation
+        description: Mentions genetic variation (recombination / independent assortment)
+        max_points: 1
+        levels:
+          "1": Mentions variation and its origin
+          "0": Does not mention it

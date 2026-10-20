@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "ingestion": "./src/huc/graphs/ingestion.py:graph",
+    "grading": "./src/huc/graphs/grading.py:graph"
+  },
+  "env": ".env"
+}
