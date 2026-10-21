@@ -7,42 +7,63 @@ from huc.domain.models import SourceKind
 from huc.ingestion import loaders
 
 
-def _pdf(path, text: str | None):
+def _image(path, width: int, height: int):
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, width, height), False)
+    pix.clear_with(255)
+    pix.save(path)
+    return path
+
+
+def _png_size(b64: str) -> tuple[int, int]:
+    pix = pymupdf.Pixmap(base64.b64decode(b64))
+    return pix.width, pix.height
+
+
+def test_pdf_pages_are_always_rasterized(tmp_path):
+    path = tmp_path / "exam.pdf"
     doc = pymupdf.open()
-    page = doc.new_page()
-    if text:
-        page.insert_text((50, 72), text)
-    else:
-        page.draw_rect(pymupdf.Rect(50, 50, 200, 200))
+    doc.new_page().insert_text((50, 72), "Even a page with a text layer is OCR'd as an image.")
+    doc.new_page()
     doc.save(path)
 
-
-def test_digital_pdf_yields_text(tmp_path):
-    path = tmp_path / "digital.pdf"
-    _pdf(path, "Answer 2: mitosis produces two identical diploid cells.")
-    doc = loaders.load_pdf(path)
-    assert doc.kind is SourceKind.PDF
-    [page] = doc.pages
-    assert "mitosis" in page.text and page.image_b64 is None
-    assert page.to_content_block()["type"] == "text"
-
-
-def test_scanned_pdf_yields_png(tmp_path):
-    path = tmp_path / "scanned.pdf"
-    _pdf(path, None)
-    [page] = loaders.load_pdf(path).pages
-    assert page.text is None
+    loaded = loaders.load_document(path, dpi=100)
+    assert loaded.kind is SourceKind.PDF
+    assert [p.number for p in loaded.pages] == [1, 2]
+    page = loaded.pages[0]
     assert base64.b64decode(page.image_b64).startswith(b"\x89PNG")
-    block = page.to_content_block()
-    assert block == {"type": "image", "base64": page.image_b64, "mime_type": "image/png"}
+    assert page.to_content_block() == {
+        "type": "image", "base64": page.image_b64, "mime_type": "image/png"
+    }
+    # A4 at 100 dpi
+    assert _png_size(page.image_b64) == (827, 1170)
 
 
-def test_image_and_kind_detection(tmp_path):
-    path = tmp_path / "photo.JPG"
-    path.write_bytes(b"\xff\xd8fake")
-    doc = loaders.load_document(path)
-    assert doc.kind is SourceKind.IMAGE
-    assert doc.pages[0].media_type == "image/jpeg"
-    assert loaders.detect_kind(tmp_path / "x.json") is SourceKind.LMS_JSON
-    with pytest.raises(ValueError):
-        loaders.detect_kind(tmp_path / "x.docx")
+def test_high_dpi_pdf_is_capped(tmp_path):
+    path = tmp_path / "exam.pdf"
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.save(path)
+    [page] = loaders.load_pdf(path, dpi=600).pages
+    assert max(_png_size(page.image_b64)) == loaders.MAX_SIDE_PX
+
+
+def test_small_image_is_kept_as_is(tmp_path):
+    path = _image(tmp_path / "photo.JPG", 300, 400)
+    loaded = loaders.load_document(path)
+    assert loaded.kind is SourceKind.IMAGE
+    [page] = loaded.pages
+    assert page.media_type == "image/jpeg"
+    assert base64.b64decode(page.image_b64) == path.read_bytes()
+
+
+def test_large_image_is_downscaled(tmp_path):
+    path = _image(tmp_path / "photo.png", 4000, 3000)
+    [page] = loaders.load_document(path).pages
+    assert page.media_type == "image/png"
+    assert _png_size(page.image_b64) == (2000, 1500)
+
+
+def test_unsupported_formats(tmp_path):
+    for name in ("x.json", "x.docx"):
+        with pytest.raises(ValueError, match="Unsupported file format"):
+            loaders.detect_kind(tmp_path / name)

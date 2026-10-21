@@ -23,7 +23,8 @@ def _now() -> datetime:
 
 
 class QuestionType(StrEnum):
-    MULTIPLE_CHOICE = "multiple_choice"
+    """All questions are open-ended (handwritten); every type is graded per rubric criterion."""
+
     SHORT_ANSWER = "short_answer"
     ESSAY = "essay"
     CODE = "code"
@@ -45,8 +46,6 @@ class Question(BaseModel):
     type: QuestionType
     prompt: str
     reference_answer: str | None = None
-    # Multiple choice only: graded deterministically, without an LLM
-    correct_option: str | None = None
     criteria: list[Criterion] = Field(default_factory=list)
 
     @property
@@ -73,13 +72,12 @@ class Exam(BaseModel):
 class SourceKind(StrEnum):
     PDF = "pdf"
     IMAGE = "image"
-    LMS_JSON = "lms_json"
 
 
 class Answer(BaseModel):
     question_id: str
     text: str
-    # Transcription/segmentation confidence (1.0 when the answer was born digital)
+    # OCR + segmentation confidence (0-1), estimated by the segmenter agent
     extraction_confidence: float = 1.0
     source_pages: list[int] = Field(default_factory=list)
 
@@ -134,7 +132,7 @@ class QuestionGrade(BaseModel):
     question_id: str
     scores: list[CriterionScore]
     review: ReviewVerdict | None = None
-    graded_by: str  # model name, "deterministic" or "human:<id>"
+    graded_by: str  # model name or "human:<id>"
 
     @property
     def points(self) -> float:

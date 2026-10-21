@@ -7,7 +7,7 @@ def test_roundtrip(repo, exam):
     assert repo.get_exam(exam.id) == exam
     assert [e.id for e in repo.list_exams()] == [exam.id]
 
-    sub = Submission(exam_id=exam.id, student_id="A1", source_kind=SourceKind.LMS_JSON)
+    sub = Submission(exam_id=exam.id, student_id="A1", source_kind=SourceKind.IMAGE)
     other = Submission(exam_id="other", student_id="A2", source_kind=SourceKind.PDF)
     repo.save_submission(sub)
     repo.save_submission(other)

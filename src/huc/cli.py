@@ -1,14 +1,16 @@
-"""Command-line interface: huc exam-load | ingest | grade | show | finalize | export."""
+"""Command-line interface: huc exam-load | ocr | ingest | grade | show | finalize | export."""
 
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
 
 from huc.domain.models import Grade
+from huc.ocr import OcrUnavailableError
 from huc.services import HucService
 
 app = typer.Typer(help="Exam ingestion and grading with LLM agents.", no_args_is_help=True)
@@ -35,9 +37,26 @@ def exam_load(path: Annotated[Path, typer.Argument(help="Exam + rubric YAML file
 
 
 @app.command()
+def ocr(path: Annotated[Path, typer.Argument(help="A scanned PDF or a photo (PNG/JPG).")]) -> None:
+    """Run only the local OCR on a file and print each page's transcription (no Claude call)."""
+
+    async def run() -> None:
+        start = time.monotonic()
+        async for number, text in get_service().ocr_file(path):
+            elapsed = time.monotonic() - start
+            typer.echo(f"--- page {number} ({elapsed:.0f}s) ---\n{text}\n")
+            start = time.monotonic()
+
+    try:
+        asyncio.run(run())
+    except (FileNotFoundError, ValueError, OcrUnavailableError) as e:
+        _fail(str(e))
+
+
+@app.command()
 def ingest(
     exam_id: Annotated[str, typer.Argument(help="Exam ID.")],
-    path: Annotated[Path, typer.Argument(help="A file (PDF/image/LMS JSON) or a directory.")],
+    path: Annotated[Path, typer.Argument(help="A scanned PDF / PNG / JPG, or a directory.")],
     student_id: Annotated[str | None, typer.Option(help="Student ID (single file only).")] = None,
 ) -> None:
     """Ingest a submission file or every supported file in a directory."""
@@ -47,7 +66,7 @@ def ingest(
             subs = asyncio.run(svc.ingest_dir(exam_id, path))
         else:
             subs = [asyncio.run(svc.ingest_file(exam_id, path, student_id))]
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, OcrUnavailableError) as e:
         _fail(str(e))
     for s in subs:
         typer.echo(f"{s.id}  student={s.student_id}  answers={len(s.answers)}")

@@ -1,11 +1,13 @@
-"""HTTP API tests. The LLM is a fake: no network, no API key."""
+"""HTTP API tests. Claude and OCR models are fakes: no network, no Ollama, no API key."""
 
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
+from conftest import EXAM_YAML, FakeLLM, FakeOCR
 from fastapi.testclient import TestClient
 
 from huc.api.app import create_app
@@ -13,42 +15,11 @@ from huc.config import Settings
 from huc.services import HucService
 from huc.storage.repository import FileRepository
 
-EXAMPLES = Path(__file__).parent.parent / "examples"
-EXAM_YAML = EXAMPLES / "exam_example.yaml"
-LMS_JSON = EXAMPLES / "submission_lms.json"
-
-
-class FakeStructuredLLM:
-    def __init__(self, parent: "FakeLLM", schema: type) -> None:
-        self.parent, self.schema = parent, schema
-
-    async def ainvoke(self, messages, *args, **kwargs):
-        name = self.schema.__name__
-        self.parent.calls.append(name)
-        if name == "CriterionScore":
-            return self.schema(
-                criterion_id="ignored", points=1.0, justification="Correct and complete.",
-                evidence=["4 haploid cells"], confidence=0.9,
-            )
-        if name == "ReviewVerdict":
-            return self.schema(approved=True)
-        raise AssertionError(f"unexpected schema {name}")
-
-
-class FakeLLM:
-    """Minimal chat-model stand-in: `.with_structured_output(schema).ainvoke(messages)`."""
-
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    def with_structured_output(self, schema, **kwargs):
-        return FakeStructuredLLM(self, schema)
-
 
 @pytest.fixture
 def service(tmp_path) -> HucService:
     settings = Settings(data_dir=tmp_path)
-    return HucService(FileRepository(tmp_path), llm=FakeLLM(), settings=settings)
+    return HucService(FileRepository(tmp_path), llm=FakeLLM(), settings=settings, ocr=FakeOCR())
 
 
 @pytest.fixture
@@ -62,13 +33,12 @@ def _create_exam(client: TestClient) -> str:
     return r.json()["id"]
 
 
-def _upload_lms(client: TestClient, exam_id: str) -> dict:
-    r = client.post(
+def _upload_scan(client: TestClient, exam_id: str, pdf: Path, **params) -> httpx.Response:
+    return client.post(
         f"/exams/{exam_id}/submissions",
-        files={"file": ("submission.json", LMS_JSON.read_bytes(), "application/json")},
+        params=params,
+        files={"file": ("scan.pdf", pdf.read_bytes(), "application/pdf")},
     )
-    assert r.status_code == 200, r.text
-    return r.json()
 
 
 def test_import_does_not_require_api_key():
@@ -90,13 +60,38 @@ def test_invalid_exam_yaml_is_422(client):
     assert r.status_code == 422
 
 
-def test_upload_and_get_submission(client):
+def test_upload_and_get_submission(client, service, scan_pdf):
     exam_id = _create_exam(client)
-    sub = _upload_lms(client, exam_id)
+    r = _upload_scan(client, exam_id, scan_pdf, student_id="S-1")
+    assert r.status_code == 200, r.text
+    sub = r.json()
 
     assert sub["status"] == "ingested"
+    assert sub["student_id"] == "S-1"
+    assert sub["source_kind"] == "pdf"
+    assert len(service.ocr.calls) == 2
     assert client.get(f"/submissions/{sub['id']}").json()["id"] == sub["id"]
     assert [s["id"] for s in client.get(f"/exams/{exam_id}/submissions").json()] == [sub["id"]]
+
+
+def test_unsupported_upload_is_422(client):
+    exam_id = _create_exam(client)
+    r = client.post(
+        f"/exams/{exam_id}/submissions", files={"file": ("answers.json", b"{}", "application/json")}
+    )
+    assert r.status_code == 422
+
+
+def test_ollama_down_is_503(tmp_path, scan_pdf):
+    class Down:
+        async def ainvoke(self, *a, **k):
+            raise ConnectionError("refused")
+
+    svc = HucService(FileRepository(tmp_path), settings=Settings(data_dir=tmp_path), ocr=Down())
+    client = TestClient(create_app(svc))
+    r = _upload_scan(client, _create_exam(client), scan_pdf)
+    assert r.status_code == 503
+    assert "ollama serve" in r.json()["detail"]
 
 
 def test_unknown_ids_are_404(client):
@@ -108,16 +103,15 @@ def test_unknown_ids_are_404(client):
     assert client.post("/submissions/nope/finalize").status_code == 404
 
 
-def test_grade_finalize_export(client):
+def test_grade_finalize_export(client, scan_pdf):
     exam_id = _create_exam(client)
-    sub = _upload_lms(client, exam_id)
+    sub = _upload_scan(client, exam_id, scan_pdf).json()
 
     # Finalizing before grading is a client error.
     assert client.post(f"/submissions/{sub['id']}/finalize").status_code == 422
 
     # TestClient runs background tasks before returning.
-    r = client.post(f"/exams/{exam_id}/grade")
-    assert r.status_code == 202
+    assert client.post(f"/exams/{exam_id}/grade").status_code == 202
 
     grade = client.get(f"/submissions/{sub['id']}/grade").json()
     assert grade["submission_id"] == sub["id"]

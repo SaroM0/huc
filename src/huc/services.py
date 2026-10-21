@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import yaml
@@ -17,20 +18,28 @@ from huc.config import Settings, get_settings
 from huc.domain.models import Exam, Grade, Submission, SubmissionStatus
 from huc.graphs.grading import build_grading_graph
 from huc.graphs.ingestion import build_ingestion_graph
+from huc.ingestion import loaders
+from huc.ocr import get_ocr_model, transcribe_page
 from huc.storage.repository import FileRepository, Repository
 
 # File types picked up when ingesting a whole directory.
-INGESTIBLE_SUFFIXES = {".pdf", ".json", ".png", ".jpg", ".jpeg"}
+INGESTIBLE_SUFFIXES = loaders.SUPPORTED_SUFFIXES
 
 # Submissions in these states are (re)graded by `grade_exam`.
 PENDING_STATUSES = (SubmissionStatus.INGESTED, SubmissionStatus.FAILED)
 
 
 class HucService:
-    def __init__(self, repo: Repository, llm=None, settings: Settings | None = None) -> None:
+    def __init__(
+        self, repo: Repository, llm=None, settings: Settings | None = None, ocr=None
+    ) -> None:
+        """`llm`: Claude-like chat model (None -> real models); `ocr`: Ollama-like vision model."""
         self.settings = settings or get_settings()
         self.repo = repo
-        self.ingestion_graph = build_ingestion_graph(repo=repo, llm=llm, settings=self.settings)
+        self.ocr = ocr
+        self.ingestion_graph = build_ingestion_graph(
+            repo=repo, llm=llm, settings=self.settings, ocr=ocr
+        )
         self.grading_graph = build_grading_graph(repo=repo, llm=llm, settings=self.settings)
 
     @classmethod
@@ -66,6 +75,16 @@ class HucService:
             {"exam_id": exam_id, "file_path": str(path), "student_id": student_id}
         )
         return result["submission"]
+
+    async def ocr_file(self, path: Path) -> AsyncIterator[tuple[int, str]]:
+        """OCR only (no Claude call, nothing saved): yield (page number, text) per page."""
+        path = Path(path)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        doc = loaders.load_document(path, dpi=self.settings.pdf_dpi)
+        model = self.ocr if self.ocr is not None else get_ocr_model(self.settings)
+        for page in doc.pages:
+            yield page.number, await transcribe_page(model, page)
 
     async def ingest_dir(self, exam_id: str, directory: Path) -> list[Submission]:
         files = sorted(

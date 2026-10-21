@@ -1,36 +1,35 @@
-"""Loaders: turn an input file into normalized pages.
+"""Loaders: turn a scanned PDF or a photo into page images ready for OCR.
 
-Each page carries text (digital PDF) or a PNG/JPEG image (scanned PDF or photo).
-The extraction node decides what to send to the model.
+Exams are handwritten, so PDFs are always rasterized (no digital-text branch).
+Large images are downscaled so CPU OCR stays reasonably fast.
 """
 
 from __future__ import annotations
 
 import base64
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import pymupdf
+
 from huc.domain.models import SourceKind
 
-# A PDF page with less text than this is treated as scanned and rasterized.
-MIN_CHARS_PER_PAGE = 40
 IMAGE_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
-SUPPORTED_SUFFIXES = {".pdf", ".json", *IMAGE_SUFFIXES}
+SUPPORTED_SUFFIXES = {".pdf", *IMAGE_SUFFIXES}
+# Longest side, in pixels, of the image sent to the OCR model. Enough for handwriting;
+# larger images only make CPU inference slower.
+MAX_SIDE_PX = 2000
 
 
 @dataclass
 class Page:
     number: int  # 1-based
-    text: str | None = None
-    image_b64: str | None = None
+    image_b64: str
     media_type: str = "image/png"
 
     def to_content_block(self) -> dict:
-        """LangChain standard content block (text or base64 image)."""
-        if self.image_b64:
-            return {"type": "image", "base64": self.image_b64, "mime_type": self.media_type}
-        return {"type": "text", "text": f'<page n="{self.number}">\n{self.text}\n</page>'}
+        """LangChain standard base64 image content block."""
+        return {"type": "image", "base64": self.image_b64, "mime_type": self.media_type}
 
 
 @dataclass
@@ -46,44 +45,45 @@ def detect_kind(path: Path) -> SourceKind:
         return SourceKind.PDF
     if suffix in IMAGE_SUFFIXES:
         return SourceKind.IMAGE
-    if suffix == ".json":
-        return SourceKind.LMS_JSON
-    raise ValueError(f"Unsupported file format: {path.name}")
+    raise ValueError(f"Unsupported file format: {path.name} (expected PDF, PNG or JPG)")
 
 
-def load_pdf(path: Path, dpi: int = 150) -> LoadedDocument:
-    import pymupdf
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
 
+
+def _render_png(page: pymupdf.Page, zoom: float) -> bytes:
+    return page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)).tobytes("png")
+
+
+def _fit_zoom(page: pymupdf.Page) -> float:
+    """Zoom that makes the page's longest side MAX_SIDE_PX pixels."""
+    return MAX_SIDE_PX / max(page.rect.width, page.rect.height)
+
+
+def load_pdf(path: Path, dpi: int = 200) -> LoadedDocument:
     pages: list[Page] = []
     with pymupdf.open(path) as doc:
         for i, page in enumerate(doc, start=1):
-            text = page.get_text().strip()
-            if len(text) >= MIN_CHARS_PER_PAGE:
-                pages.append(Page(number=i, text=text))
-            else:
-                png = page.get_pixmap(dpi=dpi).tobytes("png")
-                pages.append(Page(number=i, image_b64=base64.b64encode(png).decode()))
+            zoom = min(dpi / 72, _fit_zoom(page))
+            pages.append(Page(number=i, image_b64=_b64(_render_png(page, zoom))))
     return LoadedDocument(SourceKind.PDF, path, pages)
 
 
 def load_image(path: Path) -> LoadedDocument:
-    data = base64.b64encode(path.read_bytes()).decode()
-    media_type = IMAGE_SUFFIXES[path.suffix.lower()]
-    return LoadedDocument(
-        SourceKind.IMAGE, path, [Page(number=1, image_b64=data, media_type=media_type)]
-    )
+    """Keep the original bytes unless the image is larger than MAX_SIDE_PX."""
+    pix = pymupdf.Pixmap(str(path))
+    if max(pix.width, pix.height) <= MAX_SIDE_PX:
+        page = Page(number=1, image_b64=_b64(path.read_bytes()),
+                    media_type=IMAGE_SUFFIXES[path.suffix.lower()])
+    else:
+        with pymupdf.open(path) as doc:
+            page = Page(number=1, image_b64=_b64(_render_png(doc[0], _fit_zoom(doc[0]))))
+    return LoadedDocument(SourceKind.IMAGE, path, [page])
 
 
-def load_document(path: Path) -> LoadedDocument:
-    """Load a PDF or image into pages (LMS JSON is handled by `load_lms_json`)."""
-    kind = detect_kind(path)
-    if kind is SourceKind.PDF:
-        return load_pdf(path)
-    if kind is SourceKind.IMAGE:
-        return load_image(path)
-    raise ValueError(f"{path.name} is LMS JSON, use load_lms_json()")
-
-
-def load_lms_json(path: Path) -> dict:
-    """LMS export. Expected shape: see examples/submission_lms.json."""
-    return json.loads(path.read_text(encoding="utf-8"))
+def load_document(path: Path, dpi: int = 200) -> LoadedDocument:
+    """Load a PDF or an image into page images."""
+    if detect_kind(path) is SourceKind.PDF:
+        return load_pdf(path, dpi)
+    return load_image(path)

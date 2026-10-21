@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, U
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from huc.domain.models import Exam, Grade, Submission
+from huc.ocr import OcrUnavailableError
 from huc.services import HucService
 
 
@@ -39,6 +40,10 @@ def create_app(service: HucService | None = None) -> FastAPI:
     async def invalid(_: Request, exc: ValueError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
+    @app.exception_handler(OcrUnavailableError)
+    async def ocr_unavailable(_: Request, exc: OcrUnavailableError) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
     @app.post("/exams", response_model=Exam, summary="Create an exam from a YAML file")
     async def create_exam(file: UploadFile, svc: HucService = svc_dep) -> Exam:
         return svc.save_exam_yaml(await file.read())
@@ -50,7 +55,7 @@ def create_app(service: HucService | None = None) -> FastAPI:
     @app.post(
         "/exams/{exam_id}/submissions",
         response_model=Submission,
-        summary="Upload and ingest a submission (PDF, image or LMS JSON)",
+        summary="Upload and ingest a handwritten submission (scanned PDF, PNG or JPG)",
     )
     async def upload_submission(
         exam_id: str, file: UploadFile, student_id: str | None = None, svc: HucService = svc_dep

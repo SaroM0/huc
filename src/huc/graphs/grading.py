@@ -1,8 +1,7 @@
 """Grading graph: Submission -> persisted Grade.
 
-    START -> load_submission ─┬─ grade_multiple_choice          (deterministic, no LLM)
-                              └─ grade_criterion × N  (Send)    (one LLM call per criterion)
-          -> collect_scores ──── review_question × M  (Send)    (one LLM call per open question)
+    START -> load_submission ── grade_criterion × N  (Send)    (one LLM call per criterion)
+          -> collect_scores ──── review_question × M  (Send)    (one LLM call per question)
           -> finalize -> END                                    (build + persist Grade, set status)
 
 Input:  {"submission_id": str}
@@ -28,7 +27,6 @@ from huc.domain.models import (
     Grade,
     Question,
     QuestionGrade,
-    QuestionType,
     ReviewVerdict,
     Submission,
     SubmissionStatus,
@@ -90,26 +88,6 @@ def _answers_by_question(exam: Exam, submission: Submission) -> dict[str, Answer
     """Every exam question gets an Answer; missing ones become empty answers."""
     given = {a.question_id: a for a in submission.answers}
     return {q.id: given.get(q.id) or Answer(question_id=q.id, text="") for q in exam.questions}
-
-
-def _open_questions(exam: Exam) -> list[Question]:
-    return [q for q in exam.questions if q.type is not QuestionType.MULTIPLE_CHOICE]
-
-
-def grade_multiple_choice_question(question: Question, answer: Answer) -> QuestionGrade:
-    """Multiple choice: deterministic, no LLM."""
-    chosen = answer.text.strip().upper()
-    correct = (question.correct_option or "").strip().upper()
-    max_pts = question.max_points or 1.0
-    ok = bool(chosen) and chosen == correct
-    score = CriterionScore(
-        criterion_id=question.criteria[0].id if question.criteria else "correct",
-        points=max_pts if ok else 0.0,
-        justification=f"Selected {chosen or '(none)'}; correct is {correct}.",
-        evidence=[chosen] if chosen else [],
-        confidence=answer.extraction_confidence,
-    )
-    return QuestionGrade(question_id=question.id, scores=[score], graded_by="deterministic")
 
 
 def sanitize_score(
@@ -188,26 +166,15 @@ def build_grading_graph(
         r.save_submission(submission)
         return {"submission": submission, "exam": exam}
 
-    def fan_out_criteria(state: GradingState) -> list[Send | str]:
+    def fan_out_criteria(state: GradingState) -> list[Send] | str:
         exam = state["exam"]
         answers = _answers_by_question(exam, state["submission"])
-        sends: list[Send | str] = [
+        sends = [
             Send("grade_criterion", {"question": q, "criterion": c, "answer": answers[q.id]})
-            for q in _open_questions(exam)
+            for q in exam.questions
             for c in q.criteria
         ]
-        return ["grade_multiple_choice", *sends]
-
-    def grade_multiple_choice(state: GradingState) -> dict:
-        exam = state["exam"]
-        answers = _answers_by_question(exam, state["submission"])
-        return {
-            "question_grades": [
-                grade_multiple_choice_question(q, answers[q.id])
-                for q in exam.questions
-                if q.type is QuestionType.MULTIPLE_CHOICE
-            ]
-        }
+        return sends or "collect_scores"
 
     async def grade_criterion(task: CriterionTask) -> dict:
         question, criterion, answer = task["question"], task["criterion"], task["answer"]
@@ -249,7 +216,7 @@ def build_grading_graph(
                     "scores": [latest[(q.id, c.id)] for c in q.criteria if (q.id, c.id) in latest],
                 },
             )
-            for q in _open_questions(exam)
+            for q in exam.questions
         ]
         return sends or "finalize"
 
@@ -297,7 +264,6 @@ def build_grading_graph(
 
     builder = StateGraph(GradingState, input_schema=GradingInput)
     builder.add_node("load_submission", load_submission)
-    builder.add_node("grade_multiple_choice", grade_multiple_choice)
     builder.add_node("grade_criterion", grade_criterion)
     builder.add_node("collect_scores", collect_scores)
     builder.add_node("review_question", review_question)
@@ -305,9 +271,8 @@ def build_grading_graph(
 
     builder.add_edge(START, "load_submission")
     builder.add_conditional_edges(
-        "load_submission", fan_out_criteria, ["grade_multiple_choice", "grade_criterion"]
+        "load_submission", fan_out_criteria, ["grade_criterion", "collect_scores"]
     )
-    builder.add_edge("grade_multiple_choice", "collect_scores")
     builder.add_edge("grade_criterion", "collect_scores")
     builder.add_conditional_edges(
         "collect_scores", fan_out_reviews, ["review_question", "finalize"]

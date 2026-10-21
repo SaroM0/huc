@@ -1,9 +1,8 @@
-"""CLI tests. The service is injected with a fake LLM: no network, no API key."""
+"""CLI tests. The service gets fake Claude and OCR models: no network, no Ollama, no API key."""
 
-import shutil
-from pathlib import Path
-
+import httpx
 import pytest
+from conftest import EXAM_YAML, PAGE_TEXTS, FakeLLM, FakeOCR, make_scan_pdf
 from typer.testing import CliRunner
 
 from huc import cli
@@ -11,45 +10,20 @@ from huc.config import Settings
 from huc.services import HucService
 from huc.storage.repository import FileRepository
 
-EXAMPLES = Path(__file__).parent.parent / "examples"
-EXAM_YAML = EXAMPLES / "exam_example.yaml"
-LMS_JSON = EXAMPLES / "submission_lms.json"
-
 runner = CliRunner()
-
-
-class FakeStructuredLLM:
-    def __init__(self, schema: type) -> None:
-        self.schema = schema
-
-    async def ainvoke(self, messages, *args, **kwargs):
-        name = self.schema.__name__
-        if name == "CriterionScore":
-            return self.schema(
-                criterion_id="ignored", points=1.0, justification="Mentions crossing-over.",
-                evidence=["hay crossing-over"], confidence=0.9,
-            )
-        if name == "ReviewVerdict":
-            return self.schema(approved=True)
-        raise AssertionError(f"unexpected schema {name}")
-
-
-class FakeLLM:
-    """Minimal chat-model stand-in: `.with_structured_output(schema).ainvoke(messages)`."""
-
-    def with_structured_output(self, schema, **kwargs):
-        return FakeStructuredLLM(schema)
 
 
 @pytest.fixture
 def service(tmp_path, monkeypatch) -> HucService:
     data = tmp_path / "data"
-    svc = HucService(FileRepository(data), llm=FakeLLM(), settings=Settings(data_dir=data))
+    svc = HucService(
+        FileRepository(data), llm=FakeLLM(), settings=Settings(data_dir=data), ocr=FakeOCR()
+    )
     monkeypatch.setattr(cli, "get_service", lambda: svc)
     return svc
 
 
-def run(*args: str):
+def run(*args):
     return runner.invoke(cli.app, [str(a) for a in args])
 
 
@@ -68,28 +42,57 @@ def test_exam_load_missing_file(service, tmp_path):
     assert run("exam-load", tmp_path / "missing.yaml").exit_code == 1
 
 
-def test_ingest_file_and_dir(service, tmp_path):
+def test_ocr_prints_each_page_without_claude(service, scan_pdf):
+    r = run("ocr", scan_pdf)
+    assert r.exit_code == 0, r.output
+    assert "--- page 1 (" in r.output and "--- page 2 (" in r.output
+    assert PAGE_TEXTS[0] in r.output and PAGE_TEXTS[1] in r.output
+    assert len(service.ocr.calls) == 2
+    assert service.repo.list_exams() == []  # nothing saved
+
+
+def test_ocr_errors(service, tmp_path, monkeypatch):
+    assert run("ocr", tmp_path / "missing.pdf").exit_code == 1
+    (tmp_path / "notes.txt").write_text("x")
+    assert run("ocr", tmp_path / "notes.txt").exit_code == 1
+
+    class Down:
+        async def ainvoke(self, *a, **k):
+            raise httpx.ConnectError("refused")
+
+    down = HucService(service.repo, settings=service.settings, ocr=Down())
+    monkeypatch.setattr(cli, "get_service", lambda: down)
+    r = run("ocr", make_scan_pdf(tmp_path / "s.pdf", pages=1))
+    assert r.exit_code == 1
+    assert "ollama serve" in r.output
+
+
+def test_ingest_file_and_dir(service, tmp_path, scan_pdf):
     exam_id = _load_exam(service)
-    assert run("ingest", exam_id, LMS_JSON).exit_code == 0
+    r = run("ingest", exam_id, scan_pdf)
+    assert r.exit_code == 0, r.output
+    assert "student=A00123  answers=2" in r.output
 
     folder = tmp_path / "batch"
     folder.mkdir()
-    shutil.copy(LMS_JSON, folder / "a.json")
-    shutil.copy(LMS_JSON, folder / "b.json")
+    make_scan_pdf(folder / "a.pdf")
+    make_scan_pdf(folder / "b.PDF")
     (folder / "notes.txt").write_text("ignored")
+    (folder / "old.json").write_text("{}")  # LMS exports are no longer supported
     r = run("ingest", exam_id, folder)
     assert r.exit_code == 0, r.output
     assert "Ingested 2 submission(s)." in r.output
     assert len(service.repo.list_submissions(exam_id)) == 3
 
 
-def test_ingest_unknown_exam_fails(service):
-    assert run("ingest", "nope", LMS_JSON).exit_code == 1
+def test_ingest_unknown_exam_fails(service, scan_pdf):
+    assert run("ingest", "nope", scan_pdf).exit_code == 1
+    assert service.ocr.calls == []
 
 
-def test_grade_show_finalize_export(service, tmp_path):
+def test_grade_show_finalize_export(service, tmp_path, scan_pdf):
     exam_id = _load_exam(service)
-    run("ingest", exam_id, LMS_JSON)
+    run("ingest", exam_id, scan_pdf)
     sub_id = service.repo.list_submissions(exam_id)[0].id
 
     r = run("grade", exam_id)
@@ -100,8 +103,8 @@ def test_grade_show_finalize_export(service, tmp_path):
 
     r = run("show", sub_id)
     assert r.exit_code == 0, r.output
-    assert "Mentions crossing-over." in r.output
-    assert '> "hay crossing-over"' in r.output
+    assert "Total: 6.50 / 8" in r.output
+    assert '> "2 células diploides iguales"' in r.output
 
     assert run("finalize", sub_id).exit_code == 0
     assert service.repo.get_submission(sub_id).status == "finalized"
@@ -111,13 +114,12 @@ def test_grade_show_finalize_export(service, tmp_path):
     assert out.read_text().splitlines()[0] == "student_id,status,q1,q2,total"
 
 
-def test_show_unknown_or_ungraded(service):
+def test_show_unknown_or_ungraded(service, scan_pdf):
     assert run("show", "nope").exit_code == 1
     exam_id = _load_exam(service)
-    run("ingest", exam_id, LMS_JSON)
+    run("ingest", exam_id, scan_pdf)
     sub_id = service.repo.list_submissions(exam_id)[0].id
-    r = run("show", sub_id)
-    assert r.exit_code == 1
+    assert run("show", sub_id).exit_code == 1
     assert run("finalize", sub_id).exit_code == 1
 
 
@@ -126,12 +128,12 @@ class BrokenLLM:
         raise RuntimeError("LLM down")
 
 
-def test_grade_failure_marks_submission_failed(service, monkeypatch):
+def test_grade_failure_marks_submission_failed(service, monkeypatch, scan_pdf):
     exam_id = _load_exam(service)
-    run("ingest", exam_id, LMS_JSON)
+    run("ingest", exam_id, scan_pdf)
     sub_id = service.repo.list_submissions(exam_id)[0].id
 
-    broken = HucService(service.repo, llm=BrokenLLM(), settings=service.settings)
+    broken = HucService(service.repo, llm=BrokenLLM(), settings=service.settings, ocr=FakeOCR())
     monkeypatch.setattr(cli, "get_service", lambda: broken)
     assert run("grade", exam_id).exit_code != 0
     assert service.repo.get_submission(sub_id).status == "failed"
