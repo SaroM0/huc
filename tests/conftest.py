@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from huc.domain.models import CriterionScore, Exam, ReviewVerdict
-from huc.graphs.ingestion import SegmentationResult
+from huc.ocr import ExamReading
 from huc.storage.repository import FileRepository
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
@@ -21,12 +21,13 @@ Q1_ANSWER = (
 )
 Q2_ANSWER = "La fotosíntesis ocurre en los cloroplastos: CO2 + agua + luz -> glucosa y oxígeno."
 
-# What the fake OCR "reads" on each page of the generated scan.
-PAGE_TEXTS = [f"Nombre: Ana Pérez  ID: A00123\n1. {Q1_ANSWER}", f"2. {Q2_ANSWER}"]
+# What the fake OCR transcribes on each page of the generated scan (`huc ocr`).
+PAGE_TEXTS = [f"1. {Q1_ANSWER}", f"2. {Q2_ANSWER}"]
 
-# What the fake segmenter returns by default.
-DEFAULT_SEGMENTATION = {
-    "student_id": "A00123",
+FEEDBACK = "Bien explicado; menciona también la recombinación."
+
+# What the fake OCR returns by default when reading a whole exam.
+DEFAULT_READING = {
     "answers": [
         {"question_id": "q1", "text": Q1_ANSWER, "confidence": 0.95, "source_pages": [1]},
         {"question_id": "q2", "text": Q2_ANSWER, "confidence": 0.9, "source_pages": [2]},
@@ -35,7 +36,7 @@ DEFAULT_SEGMENTATION = {
 
 
 class FakeLLM:
-    """Minimal stand-in for a LangChain chat model (Claude roles).
+    """Minimal stand-in for a LangChain chat model (grader and reviewer roles).
 
     `with_structured_output(schema)` returns a runnable-like object whose
     `ainvoke`/`invoke` return canned Pydantic instances and record the call.
@@ -47,11 +48,12 @@ class FakeLLM:
         self,
         points: float = 1.5,
         confidence: float = 0.9,
-        needs_human: bool = False,
+        needs_verification: bool = False,
         adjusted: list[CriterionScore] | None = None,
     ) -> None:
         self.calls: list[dict] = []
-        self.points, self.confidence, self.needs_human = points, confidence, needs_human
+        self.points, self.confidence = points, confidence
+        self.needs_verification = needs_verification
         self.adjusted = adjusted or []
         self.canned: dict[type, object] = {}  # per-schema overrides
 
@@ -71,8 +73,6 @@ class FakeLLM:
     def _respond(self, schema):
         if schema in self.canned:
             return self.canned[schema]
-        if schema is SegmentationResult:
-            return SegmentationResult.model_validate(DEFAULT_SEGMENTATION)
         if schema is CriterionScore:
             return CriterionScore(
                 criterion_id="ignored",
@@ -84,8 +84,9 @@ class FakeLLM:
         if schema is ReviewVerdict:
             return ReviewVerdict(
                 approved=not self.adjusted,
-                needs_human=self.needs_human,
+                needs_verification=self.needs_verification,
                 adjusted_scores=self.adjusted,
+                feedback=FEEDBACK,
             )
         raise AssertionError(f"unexpected schema {schema}")
 
@@ -94,13 +95,32 @@ class FakeLLM:
 
 
 class FakeOCR:
-    """Stand-in for the Claude OCR model: `ainvoke(messages)` returns the next canned page text."""
+    """Stand-in for the Claude OCR model.
+
+    - `with_structured_output(ExamReading).ainvoke(messages)` (whole exam) returns `reading`.
+    - `ainvoke(messages)` (one page) returns the next canned page text.
+    Both record the messages in `calls`.
+    """
 
     model = "fake-ocr"
 
-    def __init__(self, texts: list[str] | None = None) -> None:
+    def __init__(
+        self, texts: list[str] | None = None, reading: ExamReading | dict | None = None
+    ) -> None:
         self.texts = list(texts or PAGE_TEXTS)
+        self.reading = ExamReading.model_validate(reading or DEFAULT_READING)
         self.calls: list[list] = []
+
+    def with_structured_output(self, schema, **_):
+        assert schema is ExamReading
+        fake = self
+
+        class _Bound:
+            async def ainvoke(self, messages, *args, **kwargs):
+                fake.calls.append(messages)
+                return fake.reading
+
+        return _Bound()
 
     async def ainvoke(self, messages, *args, **kwargs):
         self.calls.append(messages)
@@ -128,6 +148,10 @@ def exam(repo) -> Exam:
     return exam
 
 
+# Real submissions are named `<student>__<original name>`.
+STUDENT = "Perez_Gomez_Ana"
+
+
 @pytest.fixture
 def scan_pdf(tmp_path) -> Path:
-    return make_scan_pdf(tmp_path / "scan.pdf")
+    return make_scan_pdf(tmp_path / f"{STUDENT}__scan.pdf")

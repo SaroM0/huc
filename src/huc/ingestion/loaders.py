@@ -39,6 +39,14 @@ class LoadedDocument:
     pages: list[Page]
 
 
+def student_id_from_path(path: Path) -> str:
+    """Student ID from the file name: `Perez_Gomez_Ana__scan1.pdf` -> `Perez_Gomez_Ana`.
+
+    The scans hold only answers, so the file name is the only place the student appears.
+    """
+    return path.stem.split("__")[0]
+
+
 def detect_kind(path: Path) -> SourceKind:
     suffix = path.suffix.lower()
     if suffix == ".pdf":

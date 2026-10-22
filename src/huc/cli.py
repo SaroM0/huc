@@ -1,4 +1,4 @@
-"""Command-line interface: huc exam-load | ocr | ingest | grade | show | finalize | export."""
+"""Command-line interface: huc exam-load | ocr | ingest | grade | show | export."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import typer
 from huc.domain.models import Grade
 from huc.ocr import OcrUnavailableError
 from huc.services import HucService
+
+VERIFY_LABEL = "  [needs teacher verification]"
 
 app = typer.Typer(help="Exam ingestion and grading with LLM agents.", no_args_is_help=True)
 
@@ -38,7 +40,7 @@ def exam_load(path: Annotated[Path, typer.Argument(help="Exam + rubric YAML file
 
 @app.command()
 def ocr(path: Annotated[Path, typer.Argument(help="A scanned PDF or a photo (PNG/JPG).")]) -> None:
-    """Run only the OCR on a file and print each page's transcription (no grading)."""
+    """Transcribe each page of a file separately and print it (no grading, nothing saved)."""
 
     async def run() -> None:
         start = time.monotonic()
@@ -81,14 +83,14 @@ def grade(exam_id: Annotated[str, typer.Argument(help="Exam ID.")]) -> None:
     except (FileNotFoundError, ValueError) as e:
         _fail(str(e))
     for g in grades:
-        flag = "  [needs human review]" if g.needs_human_review else ""
+        flag = VERIFY_LABEL if g.needs_verification else ""
         typer.echo(f"{g.submission_id}  total={g.total:.2f}{flag}")
     typer.echo(f"Graded {len(grades)} submission(s).")
 
 
 @app.command()
 def show(submission_id: Annotated[str, typer.Argument(help="Submission ID.")]) -> None:
-    """Show a grade with per-criterion justification and evidence."""
+    """Show a grade with feedback and per-criterion justification and evidence."""
     svc = get_service()
     try:
         submission = svc.repo.get_submission(submission_id)
@@ -107,14 +109,17 @@ def _format_grade(grade_: Grade, exam, student_id: str, status: str) -> str:
         f"Submission {grade_.submission_id}  student={student_id}  status={status}",
         f"Exam {exam.id} ({exam.title})  rubric v{grade_.rubric_version}",
         f"Total: {grade_.total:.2f} / {max_total:g}"
-        + ("  [needs human review]" if grade_.needs_human_review else ""),
+        + (VERIFY_LABEL if grade_.needs_verification else ""),
     ]
+    lines += [f"  ? {reason}" for reason in grade_.verification_reasons]
     questions = {q.id: q for q in exam.questions}
     for qg in grade_.questions:
         q = questions.get(qg.question_id)
         label = f"Q{q.number}" if q else qg.question_id
         max_q = f" / {q.max_points:g}" if q else ""
         lines += ["", f"{label}: {qg.points:.2f}{max_q}  (graded by {qg.graded_by})"]
+        if qg.feedback:
+            lines.append(f"  Feedback: {qg.feedback}")
         for s in qg.scores:
             lines.append(
                 f"  - {s.criterion_id}: {s.points:g}  (confidence {s.confidence:.2f})"
@@ -124,23 +129,11 @@ def _format_grade(grade_: Grade, exam, student_id: str, status: str) -> str:
                 lines.append(f'      > "{quote}"')
         if qg.review is not None:
             verdict = "approved" if qg.review.approved else "not approved"
-            human = ", needs human" if qg.review.needs_human else ""
-            lines.append(f"  Review: {verdict}{human}")
+            verify = ", needs verification" if qg.review.needs_verification else ""
+            lines.append(f"  Review: {verdict}{verify}")
             for issue in qg.review.issues:
                 lines.append(f"    ! {issue}")
     return "\n".join(lines)
-
-
-@app.command()
-def finalize(submission_id: Annotated[str, typer.Argument(help="Submission ID.")]) -> None:
-    """Mark a graded submission as finalized (after teacher review)."""
-    try:
-        get_service().finalize(submission_id)
-    except FileNotFoundError:
-        _fail(f"submission {submission_id} not found")
-    except ValueError as e:
-        _fail(str(e))
-    typer.echo(f"Finalized {submission_id}")
 
 
 @app.command()

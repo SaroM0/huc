@@ -3,7 +3,7 @@
 import anthropic
 import httpx
 import pytest
-from conftest import EXAM_YAML, PAGE_TEXTS, FakeLLM, FakeOCR, make_scan_pdf
+from conftest import EXAM_YAML, FEEDBACK, PAGE_TEXTS, STUDENT, FakeLLM, FakeOCR, make_scan_pdf
 from typer.testing import CliRunner
 
 from huc import cli
@@ -43,7 +43,7 @@ def test_exam_load_missing_file(service, tmp_path):
     assert run("exam-load", tmp_path / "missing.yaml").exit_code == 1
 
 
-def test_ocr_prints_each_page_without_claude(service, scan_pdf):
+def test_ocr_prints_each_page_without_grading(service, scan_pdf):
     r = run("ocr", scan_pdf)
     assert r.exit_code == 0, r.output
     assert "--- page 1 (" in r.output and "--- page 2 (" in r.output
@@ -74,18 +74,19 @@ def test_ingest_file_and_dir(service, tmp_path, scan_pdf):
     exam_id = _load_exam(service)
     r = run("ingest", exam_id, scan_pdf)
     assert r.exit_code == 0, r.output
-    assert "student=A00123  answers=2" in r.output
+    assert f"student={STUDENT}  answers=2" in r.output
 
     folder = tmp_path / "batch"
     folder.mkdir()
-    make_scan_pdf(folder / "a.pdf")
-    make_scan_pdf(folder / "b.PDF")
+    make_scan_pdf(folder / "Soto_Vera_Eva__a.pdf")
+    make_scan_pdf(folder / "Leon_Paz_Ivan__b.PDF")
     (folder / "notes.txt").write_text("ignored")
     (folder / "old.json").write_text("{}")  # LMS exports are no longer supported
     r = run("ingest", exam_id, folder)
     assert r.exit_code == 0, r.output
     assert "Ingested 2 submission(s)." in r.output
-    assert len(service.repo.list_submissions(exam_id)) == 3
+    students = sorted(s.student_id for s in service.repo.list_submissions(exam_id))
+    assert students == ["Leon_Paz_Ivan", STUDENT, "Soto_Vera_Eva"]
 
 
 def test_ingest_unknown_exam_fails(service, scan_pdf):
@@ -93,7 +94,7 @@ def test_ingest_unknown_exam_fails(service, scan_pdf):
     assert service.ocr.calls == []
 
 
-def test_grade_show_finalize_export(service, tmp_path, scan_pdf):
+def test_grade_show_export(service, tmp_path, scan_pdf):
     exam_id = _load_exam(service)
     run("ingest", exam_id, scan_pdf)
     sub_id = service.repo.list_submissions(exam_id)[0].id
@@ -108,13 +109,30 @@ def test_grade_show_finalize_export(service, tmp_path, scan_pdf):
     assert r.exit_code == 0, r.output
     assert "Total: 6.50 / 8" in r.output
     assert '> "2 células diploides iguales"' in r.output
-
-    assert run("finalize", sub_id).exit_code == 0
-    assert service.repo.get_submission(sub_id).status == "finalized"
+    assert f"Feedback: {FEEDBACK}" in r.output
+    assert "needs teacher verification" not in r.output
 
     out = tmp_path / "grades.csv"
     assert run("export", exam_id, "--out", out).exit_code == 0
-    assert out.read_text().splitlines()[0] == "student_id,status,q1,q2,total"
+    assert out.read_text().splitlines()[0] == (
+        "student_id,status,q1,q2,total,needs_verification,verification_reasons,"
+        "q1_feedback,q2_feedback"
+    )
+
+
+def test_low_confidence_is_labelled(service, monkeypatch, scan_pdf):
+    unsure = HucService(
+        service.repo, llm=FakeLLM(confidence=0.4), settings=service.settings, ocr=FakeOCR()
+    )
+    monkeypatch.setattr(cli, "get_service", lambda: unsure)
+    exam_id = _load_exam(unsure)
+    run("ingest", exam_id, scan_pdf)
+    r = run("grade", exam_id)
+    assert "[needs teacher verification]" in r.output
+    sub_id = unsure.repo.list_submissions(exam_id)[0].id
+    r = run("show", sub_id)
+    assert "status=graded" in r.output
+    assert "? q1/products: confidence 0.40 < 0.7" in r.output
 
 
 def test_show_unknown_or_ungraded(service, scan_pdf):
@@ -123,7 +141,6 @@ def test_show_unknown_or_ungraded(service, scan_pdf):
     run("ingest", exam_id, scan_pdf)
     sub_id = service.repo.list_submissions(exam_id)[0].id
     assert run("show", sub_id).exit_code == 1
-    assert run("finalize", sub_id).exit_code == 1
 
 
 class BrokenLLM:

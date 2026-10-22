@@ -2,7 +2,7 @@
 
 This is a thin layer over the LangGraph graphs: it builds them once, feeds them
 inputs and handles the few things that are not part of a graph (loading exams,
-finalizing, exporting).
+exporting).
 """
 
 from __future__ import annotations
@@ -33,14 +33,12 @@ class HucService:
     def __init__(
         self, repo: Repository, llm=None, settings: Settings | None = None, ocr=None
     ) -> None:
-        """`llm`: Claude-like chat model (None -> real models); `ocr`: OCR vision model
-        (None -> Claude Haiku)."""
+        """`llm`: Claude-like chat model for grading (None -> real models); `ocr`: OCR
+        vision model that reads the scans (None -> Claude Haiku)."""
         self.settings = settings or get_settings()
         self.repo = repo
         self.ocr = ocr
-        self.ingestion_graph = build_ingestion_graph(
-            repo=repo, llm=llm, settings=self.settings, ocr=ocr
-        )
+        self.ingestion_graph = build_ingestion_graph(repo=repo, settings=self.settings, ocr=ocr)
         self.grading_graph = build_grading_graph(repo=repo, llm=llm, settings=self.settings)
 
     @classmethod
@@ -78,7 +76,7 @@ class HucService:
         return result["submission"]
 
     async def ocr_file(self, path: Path) -> AsyncIterator[tuple[int, str]]:
-        """OCR only (no segmentation or grading, nothing saved): yield (page number, text)."""
+        """Plain per-page OCR (no grading, nothing saved): yield (page number, text)."""
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -124,31 +122,32 @@ class HucService:
         ]
         return [await self.grade(s.id) for s in pending]
 
-    # -- human review & export ----------------------------------------------
-
-    def finalize(self, submission_id: str) -> Submission:
-        """Called by the teacher after reviewing (or accepting) the grade."""
-        submission = self.repo.get_submission(submission_id)
-        if self.repo.get_grade(submission_id) is None:
-            raise ValueError(f"Submission {submission_id} has no grade yet")
-        submission.status = SubmissionStatus.FINALIZED
-        self.repo.save_submission(submission)
-        return submission
+    # -- export -------------------------------------------------------------
 
     def export_csv(self, exam_id: str) -> str:
+        """One row per submission: points and feedback per question, total, verification label."""
         exam = self.repo.get_exam(exam_id)
         out = io.StringIO()
         writer = csv.writer(out)
-        writer.writerow(
-            ["student_id", "status", *[f"q{q.number}" for q in exam.questions], "total"]
-        )
+        writer.writerow([
+            "student_id",
+            "status",
+            *[f"q{q.number}" for q in exam.questions],
+            "total",
+            "needs_verification",
+            "verification_reasons",
+            *[f"q{q.number}_feedback" for q in exam.questions],
+        ])
         for s in self.repo.list_submissions(exam_id):
             grade = self.repo.get_grade(s.id)
-            per_q = {qg.question_id: qg.points for qg in grade.questions} if grade else {}
+            per_q = {qg.question_id: qg for qg in grade.questions} if grade else {}
             writer.writerow([
                 s.student_id,
                 s.status,
-                *[per_q.get(q.id, "") for q in exam.questions],
+                *[per_q[q.id].points if q.id in per_q else "" for q in exam.questions],
                 grade.total if grade else "",
+                grade.needs_verification if grade else "",
+                "; ".join(grade.verification_reasons) if grade else "",
+                *[per_q[q.id].feedback if q.id in per_q else "" for q in exam.questions],
             ])
         return out.getvalue()

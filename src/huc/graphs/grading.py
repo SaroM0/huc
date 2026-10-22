@@ -4,8 +4,11 @@
           -> collect_scores ──── review_question × M  (Send)    (one LLM call per question)
           -> finalize -> END                                    (build + persist Grade, set status)
 
+Every submission is graded and gets feedback per question. Low confidence or a reviewer
+flag only labels the grade `needs_verification` (with the reasons); it never blocks it.
+
 Input:  {"submission_id": str}
-Output: state with "grade" (persisted); submission status set to GRADED or NEEDS_HUMAN_REVIEW.
+Output: state with "grade" (persisted); submission status set to GRADED.
 Limit parallel LLM calls with config={"max_concurrency": settings.max_concurrency}.
 Setting the status to FAILED on exceptions is left to the caller.
 """
@@ -118,9 +121,21 @@ def apply_verdict(
     ]
 
 
-def needs_human(question_grade: QuestionGrade, threshold: float) -> bool:
-    low_confidence = any(s.confidence < threshold for s in question_grade.scores)
-    return low_confidence or bool(question_grade.review and question_grade.review.needs_human)
+# Feedback for questions the reviewer never sees (empty answers).
+EMPTY_ANSWER_FEEDBACK = "No respondiste esta pregunta."
+
+
+def verification_reasons(question_grade: QuestionGrade, threshold: float) -> list[str]:
+    """Why a teacher should check this question's grade (empty list: nothing to check)."""
+    qid = question_grade.question_id
+    reasons = [
+        f"{qid}/{s.criterion_id}: confidence {s.confidence:.2f} < {threshold:g}"
+        for s in question_grade.scores
+        if s.confidence < threshold
+    ]
+    if question_grade.review and question_grade.review.needs_verification:
+        reasons.append(f"{qid}: flagged by the reviewer")
+    return reasons
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +238,7 @@ def build_grading_graph(
     async def review_question(task: ReviewTask) -> dict:
         question, answer, scores = task["question"], task["answer"], task["scores"]
         verdict: ReviewVerdict | None = None
+        feedback = "" if answer.text.strip() else EMPTY_ANSWER_FEEDBACK
         if answer.text.strip() and scores:
             messages = build_messages(
                 review_prompts.reviewer_system(question),
@@ -233,30 +249,33 @@ def build_grading_graph(
             )
             verdict = await structured(model_for("reviewer"), ReviewVerdict).ainvoke(messages)
             scores = apply_verdict(question, answer, scores, verdict)
+            feedback = verdict.feedback
         qg = QuestionGrade(
-            question_id=question.id, scores=scores, review=verdict, graded_by=grader_name()
+            question_id=question.id,
+            scores=scores,
+            review=verdict,
+            feedback=feedback,
+            graded_by=grader_name(),
         )
         return {"question_grades": [qg]}
 
     def finalize(state: GradingState) -> dict:
         exam, submission = state["exam"], state["submission"]
-        threshold = cfg().human_review_threshold
+        threshold = cfg().verification_threshold
         by_question = {qg.question_id: qg for qg in state.get("question_grades", [])}
         questions = [by_question[q.id] for q in exam.questions if q.id in by_question]
+        reasons = [reason for qg in questions for reason in verification_reasons(qg, threshold)]
         grade = Grade(
             submission_id=submission.id,
             exam_id=exam.id,
             rubric_version=exam.rubric_version,
             questions=questions,
-            needs_human_review=any(needs_human(qg, threshold) for qg in questions),
+            needs_verification=bool(reasons),
+            verification_reasons=reasons,
         )
         r = get_repo()
         r.save_grade(grade)
-        submission.status = (
-            SubmissionStatus.NEEDS_HUMAN_REVIEW
-            if grade.needs_human_review
-            else SubmissionStatus.GRADED
-        )
+        submission.status = SubmissionStatus.GRADED
         r.save_submission(submission)
         return {"grade": grade, "submission": submission}
 

@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, U
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from huc.domain.models import Exam, Grade, Submission
+from huc.ingestion import loaders
 from huc.ocr import OcrUnavailableError
 from huc.services import HucService
 
@@ -67,6 +68,8 @@ def create_app(service: HucService | None = None) -> FastAPI:
         # TODO: move uploads to object storage (S3/GCS) instead of the local data dir.
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, dir=uploads) as tmp:
             tmp.write(await file.read())
+        # The stored file has a random name: take the student from the uploaded one.
+        student_id = student_id or loaders.student_id_from_path(Path(file.filename or tmp.name))
         return await svc.ingest_file(exam_id, Path(tmp.name), student_id)
 
     @app.get(
@@ -103,14 +106,6 @@ def create_app(service: HucService | None = None) -> FastAPI:
         if grade is None:
             raise HTTPException(404, "Not graded yet")
         return grade
-
-    @app.post(
-        "/submissions/{submission_id}/finalize",
-        status_code=204,
-        summary="Finalize a grade after teacher review",
-    )
-    def finalize(submission_id: str, svc: HucService = svc_dep) -> None:
-        svc.finalize(submission_id)
 
     @app.get(
         "/exams/{exam_id}/export.csv",

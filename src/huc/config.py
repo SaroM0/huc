@@ -16,12 +16,12 @@ class Settings(BaseSettings):
     # One Claude model per agent role
     grader_model: str = "claude-opus-5-5"
     reviewer_model: str = "claude-opus-5-5"
-    segmenter_model: str = "claude-opus-5-5"
 
-    # OCR: Claude Haiku transcribes each handwritten page image.
+    # OCR: Claude Haiku reads all page images of a submission and splits them by question.
     ocr_model: str = "claude-haiku-5-5"
-    # Per-page request timeout (the SDK also retries transient errors).
-    ocr_timeout_s: float = 120
+    # Per-request timeout (the SDK also retries transient errors). One request reads a
+    # whole submission, so it has to cover all of its pages.
+    ocr_timeout_s: float = 300
     # Resolution used to rasterize PDF pages before OCR
     pdf_dpi: int = 200
     # Longest side, in pixels, of each page image sent to the OCR model. 1568 px is the
@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     # Max parallel LLM calls per graph run (pass as config={"max_concurrency": ...})
     max_concurrency: int = 8
-    # Any score with confidence below this sends the submission to human review
-    human_review_threshold: float = 0.7
+    # Any score with confidence below this labels the grade "needs teacher verification"
+    verification_threshold: float = 0.7
 
 
 @lru_cache

@@ -77,7 +77,7 @@ class SourceKind(StrEnum):
 class Answer(BaseModel):
     question_id: str
     text: str
-    # OCR + segmentation confidence (0-1), estimated by the segmenter agent
+    # Reading confidence (0-1): transcription + question assignment, estimated by the OCR model
     extraction_confidence: float = 1.0
     source_pages: list[int] = Field(default_factory=list)
 
@@ -86,8 +86,6 @@ class SubmissionStatus(StrEnum):
     INGESTED = "ingested"
     GRADING = "grading"
     GRADED = "graded"
-    NEEDS_HUMAN_REVIEW = "needs_human_review"
-    FINALIZED = "finalized"
     FAILED = "failed"
 
 
@@ -125,14 +123,20 @@ class ReviewVerdict(BaseModel):
     approved: bool
     issues: list[str] = Field(default_factory=list)
     adjusted_scores: list[CriterionScore] = Field(default_factory=list)
-    needs_human: bool = False
+    needs_verification: bool = Field(
+        default=False, description="Real ambiguity a teacher should check"
+    )
+    feedback: str = Field(
+        default="", description="Feedback for the student on this answer, in Spanish"
+    )
 
 
 class QuestionGrade(BaseModel):
     question_id: str
     scores: list[CriterionScore]
     review: ReviewVerdict | None = None
-    graded_by: str  # model name or "human:<id>"
+    feedback: str = ""
+    graded_by: str  # model name
 
     @property
     def points(self) -> float:
@@ -145,7 +149,9 @@ class Grade(BaseModel):
     exam_id: str
     rubric_version: int
     questions: list[QuestionGrade]
-    needs_human_review: bool = False
+    # Every exam is graded; low confidence only labels the grade for teacher verification.
+    needs_verification: bool = False
+    verification_reasons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
 
     @property

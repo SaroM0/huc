@@ -9,8 +9,15 @@ from conftest import FakeOCR
 from pydantic import SecretStr
 
 from huc.config import Settings
+from huc.domain.models import Exam
 from huc.ingestion.loaders import Page
-from huc.ocr import TRUNCATED_MARK, OcrUnavailableError, get_ocr_model, transcribe_page
+from huc.ocr import (
+    TRUNCATED_MARK,
+    OcrUnavailableError,
+    get_ocr_model,
+    read_exam,
+    transcribe_page,
+)
 from huc.prompts import ocr as prompts
 
 PAGE = Page(number=1, image_b64="aGk=")
@@ -83,3 +90,15 @@ async def test_bad_request_propagates():
     """A malformed request is a bug, not an outage: it must not be turned into a 503."""
     with pytest.raises(anthropic.BadRequestError):
         await transcribe_page(Raising(_status_error(anthropic.BadRequestError, 400)), PAGE)
+
+
+async def test_read_exam_errors_are_clear():
+    """The whole-exam reading call maps API outages like the per-page OCR does."""
+
+    class RaisingReader(Raising):
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+    exam = Exam(title="t", questions=[])
+    with pytest.raises(OcrUnavailableError, match="2 page"):
+        await read_exam(RaisingReader(anthropic.APITimeoutError(request=REQUEST)), [PAGE, PAGE], exam)
