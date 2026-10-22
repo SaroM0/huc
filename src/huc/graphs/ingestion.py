@@ -1,16 +1,18 @@
 """Ingestion graph: handwritten exam scan (PDF / PNG / JPG) -> persisted Submission.
 
     START -> load_pages   (rasterize PDF pages / load the photo)
-          -> ocr_pages    (local Ollama vision model, one page after another)
+          -> ocr_pages    (Claude Haiku vision model, pages in parallel)
           -> segment      (Claude, text only: split the transcript by question)
           -> save -> END
 
-Page images never leave the machine: only the OCR text is sent to Claude.
+Page images are sent to the Anthropic API for OCR. The scans hold only answers; the
+student comes from `student_id` or is identified by the segmenter.
 
 Input:  {"exam_id": str, "file_path": str, "student_id": str | None}
 Output: state with "transcripts" (per-page OCR text) and "submission" (already saved).
 """
 
+import asyncio
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -69,7 +71,7 @@ def build_ingestion_graph(
     """Build the ingestion graph.
 
     `repo=None` -> FileRepository(settings.data_dir); `llm=None` -> lazy Claude segmenter
-    model; `ocr=None` -> lazy Ollama vision model (`settings.ocr_model`); `settings=None` ->
+    model; `ocr=None` -> lazy Claude OCR model (`settings.ocr_model`); `settings=None` ->
     get_settings(). Building the graph connects to nothing.
     """
 
@@ -83,17 +85,23 @@ def build_ingestion_graph(
 
     def load_pages(state: IngestionState) -> dict:
         get_repo().get_exam(state["exam_id"])  # fail before the slow OCR if the exam is unknown
-        doc = loaders.load_document(Path(state["file_path"]), dpi=cfg().pdf_dpi)
+        settings = cfg()
+        doc = loaders.load_document(
+            Path(state["file_path"]), dpi=settings.pdf_dpi, max_side=settings.ocr_max_side_px
+        )
         return {"source_kind": doc.kind, "pages": doc.pages}
 
     async def ocr_pages(state: IngestionState) -> dict:
-        """Sequential on purpose: a CPU-only Ollama cannot run pages in parallel anyway."""
+        """One OCR call per page, in parallel up to `max_concurrency`; keeps page order."""
         model = ocr if ocr is not None else get_ocr_model(cfg())
-        transcripts: list[PageTranscript] = [
-            {"page": page.number, "text": await transcribe_page(model, page)}
-            for page in state["pages"]
-        ]
-        return {"transcripts": transcripts}
+        limit = asyncio.Semaphore(cfg().max_concurrency)
+
+        async def one(page: loaders.Page) -> PageTranscript:
+            async with limit:
+                return {"page": page.number, "text": await transcribe_page(model, page)}
+
+        transcripts = await asyncio.gather(*(one(page) for page in state["pages"]))
+        return {"transcripts": list(transcripts)}
 
     async def segment(state: IngestionState) -> dict:
         exam = get_repo().get_exam(state["exam_id"])

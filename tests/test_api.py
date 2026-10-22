@@ -1,10 +1,11 @@
-"""HTTP API tests. Claude and OCR models are fakes: no network, no Ollama, no API key."""
+"""HTTP API tests. Claude and OCR models are fakes: no network, no API key."""
 
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import anthropic
 import httpx
 import pytest
 from conftest import EXAM_YAML, FakeLLM, FakeOCR
@@ -82,16 +83,18 @@ def test_unsupported_upload_is_422(client):
     assert r.status_code == 422
 
 
-def test_ollama_down_is_503(tmp_path, scan_pdf):
+def test_ocr_api_down_is_503(tmp_path, scan_pdf):
     class Down:
         async def ainvoke(self, *a, **k):
-            raise ConnectionError("refused")
+            raise anthropic.APIConnectionError(
+                request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            )
 
     svc = HucService(FileRepository(tmp_path), settings=Settings(data_dir=tmp_path), ocr=Down())
     client = TestClient(create_app(svc))
     r = _upload_scan(client, _create_exam(client), scan_pdf)
     assert r.status_code == 503
-    assert "ollama serve" in r.json()["detail"]
+    assert "Cannot reach the Anthropic API" in r.json()["detail"]
 
 
 def test_unknown_ids_are_404(client):

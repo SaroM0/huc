@@ -1,7 +1,7 @@
 """Loaders: turn a scanned PDF or a photo into page images ready for OCR.
 
 Exams are handwritten, so PDFs are always rasterized (no digital-text branch).
-Large images are downscaled so CPU OCR stays reasonably fast.
+Large images are downscaled to the size the OCR model actually uses.
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from huc.domain.models import SourceKind
 
 IMAGE_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 SUPPORTED_SUFFIXES = {".pdf", *IMAGE_SUFFIXES}
-# Longest side, in pixels, of the image sent to the OCR model. Enough for handwriting;
-# larger images only make CPU inference slower.
-MAX_SIDE_PX = 2000
+# Default longest side, in pixels, of the image sent to the OCR model (HUC_OCR_MAX_SIDE_PX).
+# Claude downscales anything larger than 1568 px, so bigger images only cost upload time.
+MAX_SIDE_PX = 1568
 
 
 @dataclass
@@ -56,34 +56,34 @@ def _render_png(page: pymupdf.Page, zoom: float) -> bytes:
     return page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)).tobytes("png")
 
 
-def _fit_zoom(page: pymupdf.Page) -> float:
-    """Zoom that makes the page's longest side MAX_SIDE_PX pixels."""
-    return MAX_SIDE_PX / max(page.rect.width, page.rect.height)
+def _fit_zoom(page: pymupdf.Page, max_side: int) -> float:
+    """Zoom that makes the page's longest side `max_side` pixels."""
+    return max_side / max(page.rect.width, page.rect.height)
 
 
-def load_pdf(path: Path, dpi: int = 200) -> LoadedDocument:
+def load_pdf(path: Path, dpi: int = 200, max_side: int = MAX_SIDE_PX) -> LoadedDocument:
     pages: list[Page] = []
     with pymupdf.open(path) as doc:
         for i, page in enumerate(doc, start=1):
-            zoom = min(dpi / 72, _fit_zoom(page))
+            zoom = min(dpi / 72, _fit_zoom(page, max_side))
             pages.append(Page(number=i, image_b64=_b64(_render_png(page, zoom))))
     return LoadedDocument(SourceKind.PDF, path, pages)
 
 
-def load_image(path: Path) -> LoadedDocument:
-    """Keep the original bytes unless the image is larger than MAX_SIDE_PX."""
+def load_image(path: Path, max_side: int = MAX_SIDE_PX) -> LoadedDocument:
+    """Keep the original bytes unless the image is larger than `max_side`."""
     pix = pymupdf.Pixmap(str(path))
-    if max(pix.width, pix.height) <= MAX_SIDE_PX:
+    if max(pix.width, pix.height) <= max_side:
         page = Page(number=1, image_b64=_b64(path.read_bytes()),
                     media_type=IMAGE_SUFFIXES[path.suffix.lower()])
     else:
         with pymupdf.open(path) as doc:
-            page = Page(number=1, image_b64=_b64(_render_png(doc[0], _fit_zoom(doc[0]))))
+            page = Page(number=1, image_b64=_b64(_render_png(doc[0], _fit_zoom(doc[0], max_side))))
     return LoadedDocument(SourceKind.IMAGE, path, [page])
 
 
-def load_document(path: Path, dpi: int = 200) -> LoadedDocument:
-    """Load a PDF or an image into page images."""
+def load_document(path: Path, dpi: int = 200, max_side: int = MAX_SIDE_PX) -> LoadedDocument:
+    """Load a PDF or an image into page images no larger than `max_side` pixels."""
     if detect_kind(path) is SourceKind.PDF:
-        return load_pdf(path, dpi)
-    return load_image(path)
+        return load_pdf(path, dpi, max_side)
+    return load_image(path, max_side)

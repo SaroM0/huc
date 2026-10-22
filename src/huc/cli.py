@@ -38,7 +38,7 @@ def exam_load(path: Annotated[Path, typer.Argument(help="Exam + rubric YAML file
 
 @app.command()
 def ocr(path: Annotated[Path, typer.Argument(help="A scanned PDF or a photo (PNG/JPG).")]) -> None:
-    """Run only the local OCR on a file and print each page's transcription (no Claude call)."""
+    """Run only the OCR on a file and print each page's transcription (no grading)."""
 
     async def run() -> None:
         start = time.monotonic()

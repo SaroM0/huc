@@ -1,5 +1,6 @@
-"""CLI tests. The service gets fake Claude and OCR models: no network, no Ollama, no API key."""
+"""CLI tests. The service gets fake Claude and OCR models: no network, no API key."""
 
+import anthropic
 import httpx
 import pytest
 from conftest import EXAM_YAML, PAGE_TEXTS, FakeLLM, FakeOCR, make_scan_pdf
@@ -58,13 +59,15 @@ def test_ocr_errors(service, tmp_path, monkeypatch):
 
     class Down:
         async def ainvoke(self, *a, **k):
-            raise httpx.ConnectError("refused")
+            raise anthropic.APIConnectionError(
+                request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            )
 
     down = HucService(service.repo, settings=service.settings, ocr=Down())
     monkeypatch.setattr(cli, "get_service", lambda: down)
     r = run("ocr", make_scan_pdf(tmp_path / "s.pdf", pages=1))
     assert r.exit_code == 1
-    assert "ollama serve" in r.output
+    assert "Cannot reach the Anthropic API" in r.output
 
 
 def test_ingest_file_and_dir(service, tmp_path, scan_pdf):

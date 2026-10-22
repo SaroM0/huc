@@ -12,15 +12,24 @@ from typing import Any
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from huc.config import get_settings
+
 MAX_TOKENS = 16000
 
 
 @lru_cache
 def get_chat_model(model: str) -> ChatAnthropic:
-    """One cached client per model name. Reads ANTHROPIC_API_KEY lazily (on first call)."""
+    """One cached client per model name. Does not connect until the first call."""
+    key = get_settings().anthropic_api_key
     # Adaptive thinking is compatible with native structured outputs (json_schema);
     # it is only incompatible with *forced* tool use, which we don't use.
-    return ChatAnthropic(model=model, max_tokens=MAX_TOKENS, thinking={"type": "adaptive"})
+    return ChatAnthropic(
+        model=model,
+        max_tokens=MAX_TOKENS,
+        thinking={"type": "adaptive"},
+        # Key from .env/environment via Settings; ChatAnthropic alone only sees the process env.
+        **({"api_key": key.get_secret_value()} if key else {}),
+    )
 
 
 def structured(llm: Any, schema: type) -> Any:

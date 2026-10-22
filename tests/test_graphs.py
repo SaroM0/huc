@@ -1,9 +1,12 @@
+import asyncio
 import subprocess
 import sys
+from types import SimpleNamespace
 
+import anthropic
 import httpx
 import pytest
-from conftest import EXAMPLES, Q1_ANSWER, FakeLLM, FakeOCR
+from conftest import EXAMPLES, Q1_ANSWER, FakeLLM, FakeOCR, make_scan_pdf
 
 from huc.domain.models import CriterionScore, SourceKind, SubmissionStatus
 from huc.graphs.grading import build_grading_graph
@@ -91,20 +94,45 @@ async def test_image_ingestion(repo, exam, tmp_path):
     assert out["submission"].source_kind is SourceKind.IMAGE
 
 
-class UnreachableOCR:
-    model, base_url = "qwen3-vl:8b-instruct", "http://localhost:11434"
+async def test_ocr_pages_run_in_parallel_and_keep_order(repo, exam, tmp_path):
+    class SlowFirstPages:
+        """Page N is the N-th call; earlier pages answer later (reverse completion order)."""
+
+        def __init__(self) -> None:
+            self.started = self.running = self.peak = 0
+
+        async def ainvoke(self, messages, *args, **kwargs):
+            self.started += 1
+            page = self.started
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+            await asyncio.sleep(0.01 * (4 - page))
+            self.running -= 1
+            return SimpleNamespace(content=f"texto {page}")
+
+    ocr = SlowFirstPages()
+    out = await ingest(repo, exam, make_scan_pdf(tmp_path / "s.pdf", pages=3), FakeLLM(), ocr)
+    assert ocr.peak == 3  # all pages in flight at once
+    assert [(t["page"], t["text"]) for t in out["transcripts"]] == [
+        (1, "texto 1"), (2, "texto 2"), (3, "texto 3")
+    ]
+
+
+class RejectedKeyOCR:
+    model = "claude-haiku-5-5"
 
     async def ainvoke(self, messages, *args, **kwargs):
-        raise httpx.ConnectError("Connection refused")
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        raise anthropic.AuthenticationError(
+            "invalid x-api-key", response=httpx.Response(401, request=request), body=None
+        )
 
 
-async def test_ollama_unreachable_error_is_clear(repo, exam, scan_pdf):
+async def test_ocr_auth_error_is_clear(repo, exam, scan_pdf):
     llm = FakeLLM()
-    with pytest.raises(OcrUnavailableError) as err:
-        await ingest(repo, exam, scan_pdf, llm, UnreachableOCR())
-    msg = str(err.value)
-    assert "ollama serve" in msg and "ollama pull qwen3-vl:8b-instruct" in msg
-    assert llm.calls == []  # never reached Claude
+    with pytest.raises(OcrUnavailableError, match="ANTHROPIC_API_KEY"):
+        await ingest(repo, exam, scan_pdf, llm, RejectedKeyOCR())
+    assert llm.calls == []  # never reached the segmenter
     assert repo.list_submissions(exam.id) == []
 
 
@@ -210,8 +238,8 @@ async def test_injected_settings_threshold_is_used(repo, exam, scan_pdf):
 # -- Studio --------------------------------------------------------------------
 
 
-def test_graphs_import_without_ollama_or_api_key(tmp_path):
-    """Studio imports the module-level graphs; that must need neither Ollama nor a key."""
+def test_graphs_import_without_network_or_api_key(tmp_path):
+    """Studio imports the module-level graphs; that must need neither network nor a key."""
     code = (
         "import json, importlib.util, pathlib\n"
         "cfg = json.loads(pathlib.Path('langgraph.json').read_text())\n"
@@ -222,8 +250,11 @@ def test_graphs_import_without_ollama_or_api_key(tmp_path):
         "    g = getattr(mod, attr)\n"
         "    print(name, sorted(g.get_graph().nodes))\n"
     )
-    # Nothing listens on this port, so any connection attempt at import time would fail.
-    env = {"PATH": "", "HUC_DATA_DIR": str(tmp_path), "HUC_OLLAMA_BASE_URL": "http://127.0.0.1:9"}
+    # An unroutable API URL and an invalid key: any call at import time would fail.
+    env = {
+        "PATH": "", "HUC_DATA_DIR": str(tmp_path), "ANTHROPIC_API_KEY": "sk-invalid",
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:9",
+    }
     proc = subprocess.run(
         [sys.executable, "-c", code], check=False, cwd=EXAMPLES.parent, env=env,
         capture_output=True, text=True,

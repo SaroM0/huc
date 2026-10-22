@@ -1,5 +1,5 @@
 """Shared test fixtures: fake Claude and OCR models, a temp repository with the example exam,
-and a generated scanned PDF. No network, no Ollama, no API key."""
+and a generated scanned PDF. No network, no API key."""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -94,7 +94,7 @@ class FakeLLM:
 
 
 class FakeOCR:
-    """Stand-in for ChatOllama: `ainvoke(messages)` returns the next canned page text."""
+    """Stand-in for the Claude OCR model: `ainvoke(messages)` returns the next canned page text."""
 
     model = "fake-ocr"
 

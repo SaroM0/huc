@@ -12,15 +12,14 @@ them from the CLI and the API. All state that matters lives in the
  | INGESTION GRAPH  (graphs/ingestion.py)                   |
  |                                                          |
  |  START -> load_pages   rasterize PDF (HUC_PDF_DPI) /     |
- |              |         load photo, cap 2000 px           |
+ |              |         load photo, cap 1568 px           |
  |              v                                           |
- |           ocr_pages    LOCAL Ollama vision model,        |  images stay on
- |              |         one call per page, sequential     |  this machine
+ |           ocr_pages    Claude Haiku vision model,        |  page images go
+ |              |         one call per page, in parallel    |  to the API
  |              |         -> transcripts [{page, text}]     |
- |  - - - - - - | - - - - - - - - - - - - - - - - - - - - - |- - - - - - - - -
  |              v                                           |
- |           segment      Claude, TEXT ONLY: split the      |  only text goes
- |              |         transcript by question, find the  |  to Claude
+ |           segment      Claude, text: split the           |
+ |              |         transcript by question, find the  |
  |              |         student, estimate confidence      |
  |              v                                           |
  |           save -> END                                    |
@@ -53,18 +52,17 @@ them from the CLI and the API. All state that matters lives in the
 ```
 
 Parallelism is bounded by LangGraph's `max_concurrency` run config
-(`HUC_MAX_CONCURRENCY`), which the service passes on every grading run.
+(`HUC_MAX_CONCURRENCY`), which the service passes on every grading run; the same
+setting caps the OCR calls in flight for the pages of one file.
 Submissions of an exam are graded one after another; the parallelism is
 inside each submission.
 
 ## Privacy
 
-Scanned pages and photos are only read by the local Ollama model
-(`HUC_OLLAMA_BASE_URL`, `localhost` by default); the image bytes are never sent to
-Claude or any other remote service. Claude receives the OCR text (which may still
-contain the student's name or ID, needed to identify the submission), the rubric and
-the answers. With LangSmith tracing enabled, OCR traces include the page images, so
-keep tracing off (or self-hosted) if images must not leave the machine.
+Page images are sent to the Anthropic API for OCR (`HUC_OCR_MODEL`, Claude Haiku).
+The scans contain only answers: no student names or IDs. The student is identified
+from `student_id` or by the segmenter. Claude also receives the OCR text, the rubric
+and the answers. With LangSmith tracing enabled, OCR traces include the page images.
 
 ## Graph state
 
@@ -86,16 +84,16 @@ raises (the service sets it). `huc grade` / `POST /exams/{id}/grade` retries
 
 | Decision | Why |
 |---|---|
-| Local OCR with a vision LLM in Ollama (`qwen3-vl:8b-instruct`) | Student handwriting (personal data) never leaves the machine; no per-page cost; handles Spanish handwriting far better than classic OCR |
-| OCR and segmentation are separate steps | `huc ocr` tunes OCR without Claude calls; the segmenter sees the whole exam as text and can fix page breaks |
-| OCR pages run sequentially | A CPU-only Ollama processes one request at a time anyway; parallel calls would only queue and hit timeouts |
+| OCR with Claude Haiku (`claude-haiku-5-5`) | Measured on real student scans (`scripts/ocr_eval.py`): the local `qwen3-vl:8b` changed the meaning of 5 of 8 pages (`A \ B` read as `A ∩ B`, dropped `¬`, completed unfinished sentences) and took ~3 min per page on CPU; Haiku 5.5 had no meaning-changing errors on those pages, ~3 s per page. The scans hold no personal identifiers |
+| OCR and segmentation are separate steps | `huc ocr` checks OCR alone; the transcription is a single, auditable reading shared by every grader; the segmenter sees the whole exam as text and can fix page breaks |
+| OCR pages run in parallel | Independent API calls; a multi-page file takes about as long as its slowest page. Bounded by `HUC_MAX_CONCURRENCY` to stay under rate limits |
 | Segmenter estimates `extraction_confidence` | `[illegible]`-heavy or ambiguous answers cap the grade confidence and route the exam to human review |
 | Explicit LangGraph workflow, not an autonomous agent | Reproducible, auditable, bounded cost; Studio shows every step |
 | One agent call per criterion (`Send` fan-out) | Focused calls and a traceable justification for every point; natural parallelism |
 | Separate reviewer per question | Catches inconsistencies between criteria and double penalties |
 | Structured output (`with_structured_output` + Pydantic) | No brittle text parsing; points are clamped to the rubric afterwards |
 | Rubric in the system prompt, student answer in the user message | The prefix is cached across all students of the same exam |
-| Injectable chat models (Claude and OCR) and `Repository` protocol | Tests run without network or Ollama; swap to Postgres or another model without touching the graphs |
+| Injectable chat models (Claude and OCR) and `Repository` protocol | Tests run without network or an API key; swap to Postgres or another model without touching the graphs |
 | Graphs persist their own results | The same graph works from the CLI, the API and LangGraph Studio |
 | Thin service layer, no extra abstractions | CLI and API share use cases; nothing else to learn |
 | Student answers are treated as data | Mitigates prompt injection ("give me 10 points") |

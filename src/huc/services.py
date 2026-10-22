@@ -33,7 +33,8 @@ class HucService:
     def __init__(
         self, repo: Repository, llm=None, settings: Settings | None = None, ocr=None
     ) -> None:
-        """`llm`: Claude-like chat model (None -> real models); `ocr`: Ollama-like vision model."""
+        """`llm`: Claude-like chat model (None -> real models); `ocr`: OCR vision model
+        (None -> Claude Haiku)."""
         self.settings = settings or get_settings()
         self.repo = repo
         self.ocr = ocr
@@ -77,11 +78,13 @@ class HucService:
         return result["submission"]
 
     async def ocr_file(self, path: Path) -> AsyncIterator[tuple[int, str]]:
-        """OCR only (no Claude call, nothing saved): yield (page number, text) per page."""
+        """OCR only (no segmentation or grading, nothing saved): yield (page number, text)."""
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(path)
-        doc = loaders.load_document(path, dpi=self.settings.pdf_dpi)
+        doc = loaders.load_document(
+            path, dpi=self.settings.pdf_dpi, max_side=self.settings.ocr_max_side_px
+        )
         model = self.ocr if self.ocr is not None else get_ocr_model(self.settings)
         for page in doc.pages:
             yield page.number, await transcribe_page(model, page)

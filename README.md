@@ -1,11 +1,11 @@
 # HUC - Exam grading with LLM agents
 
 Ingests handwritten student exams in Spanish (scanned PDFs or photos), transcribes
-them with a **local** OCR model (a vision LLM served by [Ollama](https://ollama.com)),
-and grades them with one Claude agent per rubric criterion, a reviewer agent per
-question, and escalation to human review. Page images never leave the machine:
-only the transcribed text is sent to Claude. Built on [LangGraph](https://langchain-ai.github.io/langgraph/).
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+them with **Claude Haiku** as the OCR model, and grades them with one Claude agent per
+rubric criterion, a reviewer agent per question, and escalation to human review.
+Page images are sent to the Anthropic API for OCR; the scans contain only answers (no
+student names or IDs). Built on [LangGraph](https://langchain-ai.github.io/langgraph/).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the full technical reference in [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
 ## Setup
 
@@ -18,30 +18,24 @@ All settings are environment variables with the `HUC_` prefix (Claude model per 
 OCR model, `HUC_DATA_DIR`, `HUC_MAX_CONCURRENCY`, `HUC_HUMAN_REVIEW_THRESHOLD`, ...);
 see `.env.example`.
 
-### Local OCR (Ollama)
+### OCR (Claude Haiku)
 
-```bash
-curl -fsSL https://ollama.com/install.sh | sh   # installs and starts the Ollama service
-ollama pull qwen3-vl:8b-instruct                 # default OCR model (~6 GB, Ollama >= 0.12.7)
-ollama serve                                     # only if the service is not already running
-```
+Each page image is transcribed by `claude-haiku-5-5` (`HUC_OCR_MODEL`), one API call per
+page, with the pages of a file processed in parallel (up to `HUC_MAX_CONCURRENCY`). A page
+takes a few seconds. PDFs are rasterized at `HUC_PDF_DPI` (default 200) and every image is
+capped at `HUC_OCR_MAX_SIDE_PX` (default 1568 px, the largest size Claude uses without
+downscaling). Rate limits, overload and transient errors are retried by the SDK; if a page
+still fails, raise `HUC_OCR_TIMEOUT_S` (default 120 s) or lower `HUC_MAX_CONCURRENCY`.
 
-The default model is `qwen3-vl:8b-instruct` (Q4, about 8-10 GB of RAM while running).
-Use the *instruct* tag: the plain `qwen3-vl:8b` tag is the *thinking* variant, which
-reasons before answering and is much slower on a CPU. To change the model set
-`HUC_OCR_MODEL` (e.g. `qwen2.5vl:7b`, or `qwen3-vl:4b-instruct` for less RAM and more
-speed at some accuracy cost) and pull it first.
-
-**Expect 1-3 minutes per page on a CPU-only machine** (the first call also loads the
-model into RAM). Pages are processed one after another. If a page times out, raise
-`HUC_OCR_TIMEOUT_S` (default 600 s). PDFs are rasterized at `HUC_PDF_DPI` (default 200)
-and every image is capped at 2000 px on its longest side.
-
-Tune OCR quality without spending Claude calls:
+Check the OCR alone, without segmentation or grading calls:
 
 ```bash
 huc ocr scans/ana-perez.pdf     # prints the transcription of each page and its time
 ```
+
+To measure OCR accuracy against reference transcriptions (CER/WER per page), use
+`scripts/ocr_eval.py` (`export`, `run`, `score`); its data lives in the gitignored
+`data/_ocr_eval/`.
 
 Illegible words come out as `[illegible]`; crossed-out text is dropped.
 
@@ -81,8 +75,8 @@ uvicorn huc.api.app:app --reload     # docs at http://localhost:8000/docs
 | GET | `/exams/{exam_id}/export.csv` | Export grades as CSV |
 
 Unknown IDs return 404; invalid input (bad YAML, finalizing an ungraded
-submission, unsupported file type) returns 422; Ollama unreachable or the OCR
-model not pulled returns 503.
+submission, unsupported file type) returns 422; the OCR model unavailable (invalid
+API key, unknown model, API unreachable or overloaded) returns 503.
 
 ## LangGraph Studio
 
@@ -96,14 +90,14 @@ langgraph dev        # installed with the dev extras (langgraph-cli[inmem])
 This opens LangGraph Studio in the browser. Invoke the graphs with the same
 input as the code does:
 
-- `ingestion`: `{"exam_id": "...", "file_path": "/abs/path/to/scan.pdf"}` (needs Ollama
-  running; the state shows the per-page OCR `transcripts`)
+- `ingestion`: `{"exam_id": "...", "file_path": "/abs/path/to/scan.pdf"}` (the state
+  shows the per-page OCR `transcripts`)
 - `grading`: `{"submission_id": "..."}`
 
 The graphs read and write the same `HUC_DATA_DIR`, so load an exam first
 (`huc exam-load ...`). `langgraph dev` reads `.env`.
 
-OCR calls go through LangChain's `ChatOllama`, so they are traced like the Claude calls.
+OCR calls go through LangChain's `ChatAnthropic`, so they are traced like the other Claude calls.
 Optional LangSmith tracing (for Studio and for CLI/API runs):
 
 ```bash
@@ -118,7 +112,7 @@ LANGSMITH_PROJECT=huc
 src/huc/
   domain/models.py        Exam, Question, Criterion, Submission, Grade, ...
   ingestion/loaders.py    scanned PDF / photo -> page images
-  ocr.py                  local OCR: ChatOllama vision model, one page per call
+  ocr.py                  OCR adapter: Claude Haiku vision model, one page per call
   prompts/                prompt templates (ocr, segmenter, grader, reviewer)
   graphs/ingestion.py     ingestion graph: file -> OCR -> segment -> Submission
   graphs/grading.py       grading graph: fan-out per criterion -> review -> finalize
@@ -140,4 +134,4 @@ ruff check .
 ```
 
 Tests inject fake Claude and OCR models and generate scans in a temp dir, so they need
-neither network access, Ollama, nor an API key.
+neither network access nor an API key.

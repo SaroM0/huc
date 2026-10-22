@@ -60,10 +60,22 @@ def test_large_image_is_downscaled(tmp_path):
     path = _image(tmp_path / "photo.png", 4000, 3000)
     [page] = loaders.load_document(path).pages
     assert page.media_type == "image/png"
-    assert _png_size(page.image_b64) == (2000, 1500)
+    side = loaders.MAX_SIDE_PX
+    assert _png_size(page.image_b64) == (side, side * 3 // 4)
 
 
 def test_unsupported_formats(tmp_path):
     for name in ("x.json", "x.docx"):
         with pytest.raises(ValueError, match="Unsupported file format"):
             loaders.detect_kind(tmp_path / name)
+
+
+def test_max_side_caps_pdf_and_image(tmp_path):
+    pdf = tmp_path / "exam.pdf"
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.save(pdf)
+    [page] = loaders.load_document(pdf, dpi=600, max_side=1024).pages
+    assert max(_png_size(page.image_b64)) == 1024
+    [page] = loaders.load_document(_image(tmp_path / "photo.png", 4000, 3000), max_side=1024).pages
+    assert max(_png_size(page.image_b64)) == 1024
