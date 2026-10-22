@@ -1,0 +1,105 @@
+# Taller S14 M1 (from data/Semana_14_Modulo_M1/SOLUCION_solW14.pdf). Rubric drafted for the e2e test.
+id: s14-m1
+title: Taller S14 M1
+course: Matemáticas
+rubric_version: 1
+questions:
+  - id: p1a
+    number: "1a"
+    type: short_answer
+    prompt: >
+      Un conjunto E ⊆ ℝ es denso en ℝ si todo x ∈ ℝ es límite de una sucesión de elementos de E.
+      Demuestre que si E es denso, entonces E es infinito.
+    reference_answer: >
+      Para cada k ∈ ℤ existe x_k ∈ E con |x_k − k| < 1/4. Si k ≠ ℓ, |k − ℓ| ≥ 1; si x_k = x_ℓ, por
+      desigualdad triangular 1 ≤ |k − ℓ| ≤ |k − x_k| + |x_ℓ − ℓ| < 1/2, contradicción. Los x_k son
+      distintos y hay infinitos enteros, luego E es infinito.
+    criteria:
+      - id: construction
+        description: Construye infinitos elementos de E usando la densidad (p. ej. x_k cerca de cada entero)
+        max_points: 2
+        levels: {"2": "Construcción correcta y justificada", "1": "Idea correcta pero incompleta", "0": "Ausente o incorrecta"}
+      - id: distinct
+        description: Prueba que los elementos construidos son distintos (p. ej. por desigualdad triangular)
+        max_points: 2
+        levels: {"2": "Prueba correcta", "1": "Lo afirma sin justificar bien", "0": "Ausente"}
+
+  - id: p1b
+    number: "1b"
+    type: short_answer
+    prompt: Demuestre que E es denso si y solo si para todo intervalo abierto (a, b) existe un elemento de E en (a, b).
+    reference_answer: >
+      (⇒) Con x = (a+b)/2 y ε = (b−a)/2, la sucesión que converge a x tiene un término e ∈ E con |e − x| < ε,
+      es decir a < e < b. (⇐) Para x ∈ ℝ y cada n, el intervalo (x − 1/n, x + 1/n) contiene x_n ∈ E;
+      |x_n − x| < 1/n → 0, luego x_n → x.
+    criteria:
+      - id: forward
+        description: Dirección (⇒) correcta
+        max_points: 2
+        levels: {"2": "Correcta", "1": "Idea correcta con errores", "0": "Ausente o incorrecta"}
+      - id: backward
+        description: Dirección (⇐) correcta, construyendo una sucesión que converge a x
+        max_points: 2
+        levels: {"2": "Correcta", "1": "Idea correcta con errores", "0": "Ausente o incorrecta"}
+
+  - id: p2a
+    number: "2a"
+    type: short_answer
+    prompt: >
+      Sea F = {f : ℝ → ℝ}. f ≍ g si existe C > 0 tal que C^(-1) f(x) ≤ g(x) ≤ C f(x) para todo x ∈ ℝ.
+      Demuestre que ≍ es una relación de equivalencia.
+    reference_answer: >
+      Reflexiva con C = 1. Simétrica: de C^(-1) f ≤ g ≤ C f se obtiene C^(-1) g ≤ f ≤ C g.
+      Transitiva: con constantes C, D se obtiene (CD)^(-1) f ≤ h ≤ (CD) f.
+    criteria:
+      - id: reflexive
+        description: Reflexividad
+        max_points: 1
+        levels: {"1": "Correcta", "0": "Ausente o incorrecta"}
+      - id: symmetric
+        description: Simetría
+        max_points: 1
+        levels: {"1": "Correcta", "0": "Ausente o incorrecta"}
+      - id: transitive
+        description: Transitividad (constante CD)
+        max_points: 2
+        levels: {"2": "Correcta", "1": "Idea correcta con errores", "0": "Ausente o incorrecta"}
+
+  - id: p2b
+    number: "2b"
+    type: short_answer
+    prompt: Describa la clase de equivalencia de la función constante 0.
+    reference_answer: Si g ≍ 0 entonces 0 ≤ g(x) ≤ 0, luego g = 0. La clase es [0] = {0}.
+    criteria:
+      - id: class
+        description: Concluye que la clase es {0} con justificación
+        max_points: 2
+        levels: {"2": "Correcto y justificado", "1": "Respuesta correcta sin justificar", "0": "Incorrecto o ausente"}
+
+  - id: p2c
+    number: "2c"
+    type: short_answer
+    prompt: Demuestre que f(x) = x^2 y g(x) = x^3 no están relacionadas.
+    reference_answer: >
+      Si C^(-1) x^2 ≤ x^3 ≤ C x^2 para todo x, evaluando en x = 2C se obtiene 8C^3 ≤ 4C^3, imposible.
+      (También sirve un x negativo con la desigualdad izquierda.)
+    criteria:
+      - id: contradiction
+        description: Obtiene una contradicción con un valor de x adecuado
+        max_points: 2
+        levels: {"2": "Correcta", "1": "Idea correcta con errores", "0": "Ausente o incorrecta"}
+
+  - id: p3
+    number: "3"
+    type: short_answer
+    prompt: Halle la ecuación de la hipérbola con focos en (7, 0) y (−7, 0) que pasa por el punto (4, 0).
+    reference_answer: Centro en el origen, eje horizontal, c = 7, a = 4 (vértice), b^2 = 49 − 16 = 33; x^2/16 − y^2/33 = 1.
+    criteria:
+      - id: parameters
+        description: Identifica c = 7 y a = 4 (y la forma canónica horizontal)
+        max_points: 2
+        levels: {"2": "Ambos correctos", "1": "Solo uno", "0": "Ninguno"}
+      - id: equation
+        description: Calcula b^2 = 33 y da la ecuación final x^2/16 − y^2/33 = 1
+        max_points: 2
+        levels: {"2": "Ecuación correcta", "1": "Error de cálculo menor", "0": "Ausente o incorrecta"}
