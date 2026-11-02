@@ -29,7 +29,7 @@ For the narrative architecture overview see [ARCHITECTURE.md](ARCHITECTURE.md).
 | Language | Python | ≥ 3.11 (dev on 3.14) | Whole codebase |
 | Agent orchestration | **LangGraph** | ≥ 1.0 | `StateGraph`, `Send` fan-out, list reducers |
 | LLM abstraction | **LangChain Core** | ≥ 1.0 | `BaseChatModel`, messages, structured output |
-| Cloud LLM | **langchain-anthropic** → Claude (`claude-opus-5-5`) | ≥ 1.0 | Grading, review + feedback |
+| Cloud LLM | **langchain-anthropic** → Claude (`claude-haiku-5-5`) | ≥ 1.0 | Grading, review + feedback |
 | OCR | **langchain-anthropic** → **Claude Haiku 5.5** (`claude-haiku-5-5`) | ≥ 1.0 | Reading the scans: transcription + split by question |
 | API errors | **anthropic** SDK | ≥ 1.0 | Typed errors mapped to `OcrUnavailableError` |
 | Debugging | **LangGraph Studio** (`langgraph-cli[inmem]`, `langgraph-api` ≥ 0.16) + optional **LangSmith** | — | Visual step-by-step graph runs, traces |
@@ -60,8 +60,9 @@ For the narrative architecture overview see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **One Haiku call per submission** for reading: seeing all pages at once lets the model
   join answers across pages and cope with pages out of order, rotated or repeated.
   Native structured output (`ExamReading`) returns the answers directly.
-- **Claude Opus for reasoning-heavy steps** (grading, review) with native
-  structured outputs (`method="json_schema"`) and adaptive thinking.
+- **Claude Haiku for every step** (reading, grading, review, rubric drafting), with
+  native structured outputs (`method="json_schema"`) and adaptive thinking for the
+  reasoning steps. Each role keeps its own `HUC_*_MODEL` variable to compare models.
 
 ---
 
@@ -73,12 +74,15 @@ huc/
 ├── langgraph.json             graph registry for LangGraph Studio (`langgraph dev`)
 ├── .env.example               all settings (HUC_*), Anthropic key, optional LangSmith
 ├── examples/exam_example.yaml sample exam + rubric (id: bio-101-midterm-1)
+├── examples/taller_s14_m1.yaml real taller (profile mat0004, subjects, skills)
+├── profiles/mat0004.yaml      course profile built from the teacher's material (§8.1)
 ├── docs/
 │   ├── ARCHITECTURE.md        architecture overview
 │   └── TECHNICAL.md           this document
 ├── src/huc/
 │   ├── config.py              Settings (pydantic-settings, prefix HUC_)
 │   ├── domain/models.py       Pydantic domain model (single source of truth)
+│   ├── domain/profile.py      CourseProfile: course context, grading/feedback policy, scale
 │   ├── prompts/               ONLY prompt text + tiny render helpers, one file per agent
 │   │   ├── ocr.py             read a whole exam → answers per question; per-page OCR prompt
 │   │   ├── grading.py         grade one answer against one criterion
@@ -90,6 +94,8 @@ huc/
 │   │   ├── ingestion.py       ingestion graph (+ module-level `graph` for Studio)
 │   │   └── grading.py         grading graph   (+ module-level `graph` for Studio)
 │   ├── storage/repository.py  Repository protocol (port) + FileRepository (adapter)
+│   ├── rubrics.py             find_sections() (solutions PDF by module) + draft_exam() + exam_yaml()
+│   ├── report.py              build_report(): frequent errors, means, bands (pure)
 │   ├── services.py            HucService: use cases shared by CLI and API
 │   ├── cli.py                 Typer CLI
 │   └── api/app.py             FastAPI app factory
@@ -102,8 +108,10 @@ huc/
 
 ```
 Exam ─┬─ id, title, course, rubric_version
+      ├─ profile: CourseProfile (copied from profiles/<id>.yaml at exam-load; see §8.1)
       └─ questions: [Question]
-            ├─ id, number, type (short_answer | essay | code), prompt, reference_answer
+            ├─ id, number, type (short_answer | essay | code), prompt, reference_answer,
+            │  subject (profile subject id), skill, constraints[]
             └─ criteria: [Criterion]  ── id, description, max_points, levels{points: descriptor}
 
 Submission ── id, exam_id, student_id, source_kind (pdf | image), source_path, status, created_at
@@ -114,7 +122,8 @@ Grade ── id, submission_id, exam_id, rubric_version, needs_verification,
       └─ questions: [QuestionGrade] ── question_id, graded_by, review: ReviewVerdict,
                                        feedback (Spanish, for the student), points
             └─ scores: [CriterionScore] ── criterion_id, points, justification,
-                                           evidence[] (verbatim quotes), confidence (0-1)
+                                           evidence[] (verbatim quotes), confidence (0-1),
+                                           error_type (profile error-type id or null)
 
 ReviewVerdict ── approved, issues[], adjusted_scores[CriterionScore], needs_verification, feedback
 ```
@@ -202,9 +211,15 @@ Parallelism is bounded with LangGraph's run config `{"max_concurrency": HUC_MAX_
 | File | Agent | Model | Input → Output |
 |---|---|---|---|
 | `prompts/ocr.py` (`READ_EXAM_*`) | Reader | Claude `claude-haiku-5-5` | exam questions in system; all page images in user msg → `ExamReading` (verbatim answer + confidence + pages per question) |
+| `prompts/rubric.py` | Rubric drafter | Claude (`HUC_RUBRIC_MODEL`) | section name, profile subjects + `rubric` policy in system; rendered section pages + extracted text in user msg → `RubricDraft` (validated by `rubrics.to_exam`) |
 | `prompts/ocr.py` (`OCR_*`) | Page OCR | Claude `claude-haiku-5-5` | one page image → plain verbatim text (`huc ocr`, `scripts/ocr_eval.py`) |
-| `prompts/grading.py` | Grader | Claude | (question, reference, one criterion + levels) in system; student answer in user msg → `CriterionScore` |
-| `prompts/review.py` | Reviewer | Claude | (question, full rubric) in system; answer + proposed scores in user msg → `ReviewVerdict` (adjustments + feedback in Spanish) |
+| `prompts/grading.py` | Grader | Claude | system = [course block, question block]; student answer in user msg → `CriterionScore` (with `error_type`) |
+| `prompts/review.py` | Reviewer | Claude | system = [course block + feedback policy, question + full rubric]; answer + proposed scores in user msg → `ReviewVerdict` (adjustments + feedback) |
+
+The **course block** holds the profile's description, the question's subject context,
+the grading rules and the error types. It is the same for every criterion of a subject,
+and each system block is a cache breakpoint, so it is billed at the cached rate after the
+first call. With the default profile the prompts reduce to the generic ones.
 
 ---
 
@@ -213,15 +228,44 @@ Parallelism is bounded with LangGraph's run config `{"max_concurrency": HUC_MAX_
 | Variable | Default | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | Claude access (required for real runs; read from `.env` too) |
-| `HUC_GRADER_MODEL` / `HUC_REVIEWER_MODEL` | `claude-opus-5-5` | Model per grading role |
+| `HUC_GRADER_MODEL` / `HUC_REVIEWER_MODEL` | `claude-haiku-5-5` | Model per grading role |
+| `HUC_RUBRIC_MODEL` | `claude-haiku-5-5` | Model that drafts exam YAMLs from solutions PDFs |
+| `HUC_LLM_MAX_TOKENS` / `HUC_LLM_THINKING` | `16000` / `adaptive` | Output budget and thinking mode (`adaptive`, `disabled`) of grader/reviewer/rubric calls |
+| `HUC_PROFILES_DIR` | `./profiles` | Where `profile: <id>` in an exam YAML is looked up (`<id>.yaml`) |
 | `HUC_OCR_MODEL` | `claude-haiku-5-5` | Claude vision model that reads the scans |
 | `HUC_OCR_TIMEOUT_S` | `300` | OCR request timeout; one request reads a whole submission (the SDK also retries) |
 | `HUC_OCR_MAX_SIDE_PX` | `1568` | Longest side of each page image sent to OCR |
 | `HUC_PDF_DPI` | `200` | PDF rasterization resolution |
 | `HUC_DATA_DIR` | `./data` | JSON storage root |
 | `HUC_MAX_CONCURRENCY` | `8` | Max parallel LLM calls per grading run |
-| `HUC_VERIFICATION_THRESHOLD` | `0.7` | Confidence below this ⇒ grade labelled `needs_verification` |
+| `HUC_VERIFICATION_THRESHOLD` | `0.7` | Confidence below this ⇒ grade labelled `needs_verification` (a profile can override it) |
 | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | off | Optional tracing (note: OCR traces include page images) |
+
+### 8.1 Course profiles (`profiles/<id>.yaml`, `domain/profile.py`)
+
+Run settings (models, paths, concurrency) are environment variables; **course** parameters
+live in a profile that exam YAMLs reference with `profile: <id>` (or inline as a mapping).
+`exam-load` copies the profile into the stored exam, so reload the exam after editing it.
+Every field is optional.
+
+| Field | Used by | Effect |
+|---|---|---|
+| `name`, `description` | grader, reviewer | Course context (who the students are, conventions) |
+| `subjects[]` (`id`, `name`, `context`) | grader, reviewer | Context of the question's `subject` (topics, allowed results); unknown subject ids are rejected at load |
+| `reading.notes[]` | reader (OCR) | Course notation and labelling hints |
+| `grading.rules[]` | grader, reviewer | Grading policy, e.g. accept any correct method, `[illegible]` is not penalized |
+| `grading.error_types[]` | grader, reviewer, export | Allowed `error_type` ids; others are dropped |
+| `grading.verification_threshold` | finalize | Overrides `HUC_VERIFICATION_THRESHOLD` |
+| `feedback.language`, `address`, `sentences`, `structure[]` | reviewer | Feedback language, form of address, length and the steps it covers (default: right / wrong / how to improve) |
+| `feedback.principles[]`, `good_examples[]`, `forbidden[]` | reviewer | Tone, examples to follow, comments never to write |
+| `feedback.empty_answer` | grading | Feedback for unanswered questions |
+| `rubric.points_per_question`, `max_criteria`, `guidelines[]` | rubric drafter | Weight of each question (null: model decides), criteria per question, how to write criteria |
+| `scale[]` (`label`, `min_percent`) | export, report | Band of the score percentage |
+
+`profiles/mat0004.yaml` is built from the teacher's material (local copy in the gitignored
+`data/course/`): TA grading guide (rules, GPS feedback model, good and forbidden comments),
+specification matrix (one problem per subject, a skill per problem), course booklets
+(subject contents, ℕ without 0) and the course presentation (D ≥ 75 %, A ≥ 40 %).
 
 ---
 
@@ -231,12 +275,14 @@ Parallelism is bounded with LangGraph's run config `{"max_concurrency": HUC_MAX_
 
 | Command | Description |
 |---|---|
+| `huc rubric-draft <solutions.pdf> [-m M1 ...] [--profile] [--week] [--out data/rubrics]` | Draft one exam YAML per module section (not loaded) |
 | `huc exam-load <yaml>` | Load an exam + rubric |
 | `huc ocr <file>` | Plain per-page OCR, printed (no grading, nothing saved) |
 | `huc ingest <exam_id> <file\|dir> [--student-id]` | Ingest scans (PDF/PNG/JPG) |
 | `huc grade <exam_id>` | Grade all `INGESTED`/`FAILED` submissions |
 | `huc show <submission_id>` | Feedback, per-criterion points, justification, evidence, review, verification label |
-| `huc export <exam_id> --out grades.csv` | CSV: points, total, `needs_verification` + reasons, feedback per question |
+| `huc report <exam_id> [--json]` | Frequent errors per type (with example justifications), mean points per question and criterion, bands, verification count |
+| `huc export <exam_id> --out grades.csv` | CSV: points, total, percent, band, `needs_verification` + reasons, error types and feedback per question |
 
 **REST API (`uvicorn huc.api.app:app`)**
 
@@ -246,6 +292,7 @@ Parallelism is bounded with LangGraph's run config `{"max_concurrency": HUC_MAX_
 | POST / GET | `/exams/{exam_id}/submissions` |
 | POST | `/exams/{exam_id}/grade` (background, 202) |
 | GET | `/submissions/{id}`, `/submissions/{id}/grade` |
+| GET | `/exams/{exam_id}/report` |
 | GET | `/exams/{exam_id}/export.csv` |
 
 Errors: unknown IDs → 404, invalid input → 422, OCR unavailable → 503.

@@ -1,4 +1,5 @@
-"""Command-line interface: huc exam-load | ocr | ingest | grade | show | export."""
+"""Command-line interface: huc rubric-draft | exam-load | ocr | ingest | grade | show |
+report | export."""
 
 from __future__ import annotations
 
@@ -26,6 +27,36 @@ def get_service() -> HucService:
 def _fail(message: str) -> NoReturn:
     typer.secho(f"Error: {message}", fg=typer.colors.RED, err=True)
     raise typer.Exit(1)
+
+
+@app.command("rubric-draft")
+def rubric_draft(
+    solutions: Annotated[Path, typer.Argument(help="Reference-solutions PDF of one week.")],
+    module: Annotated[
+        list[str] | None, typer.Option("--module", "-m", help="Module, e.g. M1 (repeatable).")
+    ] = None,
+    profile: Annotated[str | None, typer.Option(help="Course profile id, e.g. mat0004.")] = None,
+    week: Annotated[int | None, typer.Option(help="Week (default: from the file).")] = None,
+    out: Annotated[Path, typer.Option(help="Directory for the YAML drafts.")] = Path(
+        "data/rubrics"
+    ),
+) -> None:
+    """Draft exam YAMLs (questions + rubric) from the teacher's solutions, one per module.
+
+    The drafts are not loaded: review them, then `huc exam-load <draft>`.
+    """
+    try:
+        drafts = asyncio.run(
+            get_service().draft_rubrics(solutions, module, profile_id=profile, week=week)
+        )
+    except (FileNotFoundError, ValueError) as e:
+        _fail(str(e))
+    out.mkdir(parents=True, exist_ok=True)
+    for exam, text in drafts:
+        path = out / f"{exam.id}.yaml"
+        path.write_text(text, "utf-8")
+        points = sum(q.max_points for q in exam.questions)
+        typer.echo(f"{path}  ({len(exam.questions)} questions, {points:g} points)")
 
 
 @app.command("exam-load")
@@ -119,10 +150,12 @@ def _format_grade(grade_: Grade, exam, student_id: str, status: str) -> str:
         max_q = f" / {q.max_points:g}" if q else ""
         lines += ["", f"{label}: {qg.points:.2f}{max_q}  (graded by {qg.graded_by})"]
         if qg.feedback:
-            lines.append(f"  Feedback: {qg.feedback}")
+            review_label = " [requires review; research draft]" if qg.requires_feedback_review() else " [unflagged draft]"
+            lines.append(f"  Feedback{review_label}: {qg.feedback}")
         for s in qg.scores:
             lines.append(
                 f"  - {s.criterion_id}: {s.points:g}  (confidence {s.confidence:.2f})"
+                + (f"  [{s.error_type}]" if s.error_type else "")
             )
             lines.append(f"      {s.justification}")
             for quote in s.evidence:
@@ -137,13 +170,57 @@ def _format_grade(grade_: Grade, exam, student_id: str, status: str) -> str:
 
 
 @app.command()
+def report(
+    exam_id: Annotated[str, typer.Argument(help="Exam ID.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print the report as JSON.")] = False,
+) -> None:
+    """Frequent errors and score summary over the graded submissions of an exam."""
+    try:
+        rep = get_service().report(exam_id)
+    except (FileNotFoundError, ValueError) as exc:
+        _fail(str(exc))
+    if as_json:
+        typer.echo(rep.model_dump_json(indent=2))
+        return
+    mean = f"{rep.mean_percent:g} %" if rep.mean_percent is not None else "-"
+    lines = [
+        f"Exam {rep.exam_id} ({rep.title}): {rep.graded}/{rep.submissions} graded, "
+        + f"mean {mean}, {rep.needs_verification} need verification"
+    ]
+    if rep.bands:
+        lines.append("Bands: " + ", ".join(f"{b}={n}" for b, n in rep.bands.items()))
+    lines += _format_errors(rep.errors, "Frequent errors")
+    for q in rep.questions:
+        lines += ["", f"Q{q.number}: mean {q.mean_points:g} / {q.max_points:g} ({q.graded} graded)"]
+        lines += [
+            f"  - {c.criterion_id}: {c.mean_points:g} / {c.max_points:g}" for c in q.criteria
+        ]
+        lines += _format_errors(q.errors, "  Errors", indent="  ")
+    typer.echo("\n".join(lines))
+
+
+def _format_errors(errors, title: str, indent: str = "") -> list[str]:
+    if not errors:
+        return []
+    lines = [f"{title}:"]
+    for e in errors:
+        desc = f" ({e.description})" if e.description else ""
+        lines.append(f"{indent}  {e.error_type}: {e.count}{desc}")
+        lines += [f'{indent}      > "{ex}"' for ex in e.examples]
+    return lines
+
+
+@app.command()
 def export(
     exam_id: Annotated[str, typer.Argument(help="Exam ID.")],
     out: Annotated[Path, typer.Option(help="Output CSV path.")] = Path("grades.csv"),
+    include_flagged_feedback: Annotated[bool, typer.Option(
+        "--include-flagged-feedback", help="Include flagged research drafts in the CSV."
+    )] = False,
 ) -> None:
     """Export the grades of an exam as CSV."""
     try:
-        csv_text = get_service().export_csv(exam_id)
+        csv_text = get_service().export_csv(exam_id, include_flagged_feedback=include_flagged_feedback)
     except FileNotFoundError:
         _fail(f"exam {exam_id} not found")
     out.write_text(csv_text, "utf-8")

@@ -1,0 +1,47 @@
+exam:
+  id: synthetic-parity
+  title: Demostración sintética de paridad
+  profile:
+    name: Álgebra y demostraciones
+    grading:
+      rules:
+        - Evalúa si cada implicación está justificada y acepta distintos métodos válidos.
+        - Una conclusión verdadera sin demostración no basta para puntaje completo.
+    feedback:
+      principles:
+        - Identifica una afirmación concreta y propone un paso de demostración útil.
+  questions:
+    - id: q1
+      number: '1'
+      type: short_answer
+      prompt: Demuestra que si n es entero y n² es par, entonces n es par.
+      criteria:
+        - id: reasoning
+          description: Argumenta correctamente la implicación, directa o por contrapositiva.
+          max_points: 2
+          levels: {'0': Inválido o ausente, '1': Idea pertinente incompleta, '2': Argumento válido}
+        - id: conclusion
+          description: Concluye que n es par para cualquier entero que cumpla la hipótesis.
+          max_points: 1
+          levels: {'0': Ausente o incorrecto, '1': Correcto}
+cases:
+  - id: contrapositive
+    answer: 'Por contrapositiva, si n es impar, n = 2k + 1 para algún entero k. Entonces n² = 2(2k² + 2k) + 1 es impar. Por tanto, si n² es par, n es par.'
+    expected: {reasoning: [2, 2], conclusion: [1, 1]}
+    focus: Reconocer la contrapositiva completa y válida.
+  - id: contradiction
+    answer: 'Supongamos que n² es par y n es impar. Entonces n = 2k + 1 y n² = 2(2k² + 2k) + 1 es impar, contradicción. Así n es par.'
+    expected: {reasoning: [2, 2], conclusion: [1, 1]}
+    focus: Aceptar la prueba por contradicción.
+  - id: examples_only
+    answer: 'Para n = 2, 4 y 6 se cumple. Entonces si n² es par, n es par.'
+    expected: {reasoning: [0, 0], conclusion: [1, 1]}
+    focus: Explicar por qué unos pocos ejemplos no prueban la implicación para todos los enteros.
+  - id: wrong_implication
+    answer: 'Si n es par, n = 2k y n² = 4k² es par. Por lo tanto, si n² es par, n es par.'
+    expected: {reasoning: [0, 0], conclusion: [1, 1]}
+    focus: Explicar que probar el recíproco no prueba la implicación solicitada.
+  - id: incomplete
+    answer: 'Si n es impar entonces n = 2k + 1 y n² = 4k² + 4k + 1.'
+    expected: {reasoning: [1, 1], conclusion: [0, 0]}
+    focus: Reconocer la expansión correcta y explicar cómo concluir usando la contrapositiva.

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from huc.domain.models import Exam, Grade, Submission
 from huc.ingestion import loaders
 from huc.ocr import OcrUnavailableError
+from huc.report import ExamReport
 from huc.services import HucService
 
 
@@ -28,7 +29,7 @@ def create_app(service: HucService | None = None) -> FastAPI:
         description="Ingest student exams and grade them with LLM agents per rubric criterion.",
     )
 
-    def get_service() -> HucService:
+    async def get_service() -> HucService:
         return service or _default_service()
 
     svc_dep = Depends(get_service)
@@ -49,8 +50,16 @@ def create_app(service: HucService | None = None) -> FastAPI:
     async def create_exam(file: UploadFile, svc: HucService = svc_dep) -> Exam:
         return svc.save_exam_yaml(await file.read())
 
+    @app.get(
+        "/exams/{exam_id}/report",
+        response_model=ExamReport,
+        summary="Frequent errors and score summary of the graded submissions",
+    )
+    async def exam_report(exam_id: str, svc: HucService = svc_dep) -> ExamReport:
+        return svc.report(exam_id)
+
     @app.get("/exams", response_model=list[Exam], summary="List exams")
-    def list_exams(svc: HucService = svc_dep) -> list[Exam]:
+    async def list_exams(svc: HucService = svc_dep) -> list[Exam]:
         return svc.repo.list_exams()
 
     @app.post(
@@ -77,7 +86,7 @@ def create_app(service: HucService | None = None) -> FastAPI:
         response_model=list[Submission],
         summary="List the submissions of an exam",
     )
-    def list_submissions(exam_id: str, svc: HucService = svc_dep) -> list[Submission]:
+    async def list_submissions(exam_id: str, svc: HucService = svc_dep) -> list[Submission]:
         svc.repo.get_exam(exam_id)
         return svc.repo.list_submissions(exam_id)
 
@@ -86,14 +95,14 @@ def create_app(service: HucService | None = None) -> FastAPI:
         status_code=202,
         summary="Grade all pending submissions of an exam (in the background)",
     )
-    def grade_exam(exam_id: str, background: BackgroundTasks, svc: HucService = svc_dep) -> dict:
+    async def grade_exam(exam_id: str, background: BackgroundTasks, svc: HucService = svc_dep) -> dict:
         svc.repo.get_exam(exam_id)
         # TODO: use a real job queue (Arq/Celery/RQ) instead of BackgroundTasks in production.
         background.add_task(svc.grade_exam, exam_id)
         return {"status": "queued"}
 
     @app.get("/submissions/{submission_id}", response_model=Submission, summary="Get a submission")
-    def get_submission(submission_id: str, svc: HucService = svc_dep) -> Submission:
+    async def get_submission(submission_id: str, svc: HucService = svc_dep) -> Submission:
         return svc.repo.get_submission(submission_id)
 
     @app.get(
@@ -101,19 +110,25 @@ def create_app(service: HucService | None = None) -> FastAPI:
         response_model=Grade,
         summary="Get the grade of a submission",
     )
-    def get_grade(submission_id: str, svc: HucService = svc_dep) -> Grade:
+    async def get_grade(submission_id: str, svc: HucService = svc_dep) -> Grade:
         grade = svc.repo.get_grade(submission_id)
         if grade is None:
             raise HTTPException(404, "Not graded yet")
         return grade
+
+    @app.get("/submissions/{submission_id}/grade-history", response_model=list[Grade])
+    async def grade_history(submission_id: str, svc: HucService = svc_dep) -> list[Grade]:
+        svc.repo.get_submission(submission_id)
+        return svc.repo.list_grade_history(submission_id)
 
     @app.get(
         "/exams/{exam_id}/export.csv",
         response_class=PlainTextResponse,
         summary="Export the grades of an exam as CSV",
     )
-    def export_csv(exam_id: str, svc: HucService = svc_dep) -> str:
-        return svc.export_csv(exam_id)
+    async def export_csv(exam_id: str, include_flagged_feedback: bool = False,
+                         svc: HucService = svc_dep) -> str:
+        return svc.export_csv(exam_id, include_flagged_feedback=include_flagged_feedback)
 
     return app
 

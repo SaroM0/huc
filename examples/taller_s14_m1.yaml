@@ -2,11 +2,15 @@
 id: s14-m1
 title: Taller S14 M1
 course: Matemáticas
-rubric_version: 1
+rubric_version: 2
+# Course context, grading/feedback policy and scale: profiles/mat0004.yaml
+profile: mat0004
 questions:
   - id: p1a
     number: "1a"
     type: short_answer
+    subject: calculo
+    skill: Demostrar
     prompt: >
       Un conjunto E ⊆ ℝ es denso en ℝ si todo x ∈ ℝ es límite de una sucesión de elementos de E.
       Demuestre que si E es denso, entonces E es infinito.
@@ -16,17 +20,19 @@ questions:
       distintos y hay infinitos enteros, luego E es infinito.
     criteria:
       - id: construction
-        description: Construye infinitos elementos de E usando la densidad (p. ej. x_k cerca de cada entero)
+        description: Usa correctamente la densidad para avanzar hacia la conclusión, mediante una construcción o un argumento válido por contradicción
         max_points: 2
-        levels: {"2": "Construcción correcta y justificada", "1": "Idea correcta pero incompleta", "0": "Ausente o incorrecta"}
+        levels: {"2": "Aplicación correcta y justificada", "1": "Idea correcta pero incompleta", "0": "Ausente o incorrecta"}
       - id: distinct
-        description: Prueba que los elementos construidos son distintos (p. ej. por desigualdad triangular)
+        description: Justifica que los elementos obtenidos son distintos entre sí, o que E finito lleva a contradicción
         max_points: 2
         levels: {"2": "Prueba correcta", "1": "Lo afirma sin justificar bien", "0": "Ausente"}
 
   - id: p1b
     number: "1b"
     type: short_answer
+    subject: calculo
+    skill: Demostrar una equivalencia (ambas direcciones)
     prompt: Demuestre que E es denso si y solo si para todo intervalo abierto (a, b) existe un elemento de E en (a, b).
     reference_answer: >
       (⇒) Con x = (a+b)/2 y ε = (b−a)/2, la sucesión que converge a x tiene un término e ∈ E con |e − x| < ε,
@@ -45,6 +51,8 @@ questions:
   - id: p2a
     number: "2a"
     type: short_answer
+    subject: algebra
+    skill: Demostrar (relación de equivalencia)
     prompt: >
       Sea F = {f : ℝ → ℝ}. f ≍ g si existe C > 0 tal que C^(-1) f(x) ≤ g(x) ≤ C f(x) para todo x ∈ ℝ.
       Demuestre que ≍ es una relación de equivalencia.
@@ -68,6 +76,8 @@ questions:
   - id: p2b
     number: "2b"
     type: short_answer
+    subject: algebra
+    skill: Determinar y justificar
     prompt: Describa la clase de equivalencia de la función constante 0.
     reference_answer: Si g ≍ 0 entonces 0 ≤ g(x) ≤ 0, luego g = 0. La clase es [0] = {0}.
     criteria:
@@ -79,6 +89,8 @@ questions:
   - id: p2c
     number: "2c"
     type: short_answer
+    subject: algebra
+    skill: Demostrar por contradicción
     prompt: Demuestre que f(x) = x^2 y g(x) = x^3 no están relacionadas.
     reference_answer: >
       Si C^(-1) x^2 ≤ x^3 ≤ C x^2 para todo x, evaluando en x = 2C se obtiene 8C^3 ≤ 4C^3, imposible.
@@ -92,6 +104,8 @@ questions:
   - id: p3
     number: "3"
     type: short_answer
+    subject: geometria
+    skill: Determinar (ecuación de una cónica)
     prompt: Halle la ecuación de la hipérbola con focos en (7, 0) y (−7, 0) que pasa por el punto (4, 0).
     reference_answer: Centro en el origen, eje horizontal, c = 7, a = 4 (vértice), b^2 = 49 − 16 = 33; x^2/16 − y^2/33 = 1.
     criteria:

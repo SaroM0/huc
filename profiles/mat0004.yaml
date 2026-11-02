@@ -1,0 +1,147 @@
+# Course profile for MAT0004 Taller de Matemáticas (PUC Chile, 1st semester 2026).
+# Used by exam YAMLs with `profile: mat0004`; the exam stores a copy when loaded, so
+# reload the exam (`huc exam-load`) after editing this file.
+#
+# Sources (local, gitignored: data/course/):
+#   programa/presentacion2026.pdf          objectives, approval bands (scale)
+#   programa/prospecto_general.pdf         the three parallel courses and their teachers
+#   ayudantes/guia_TA_correccion_feedback.pdf   grading rules, GPS feedback, examples
+#   talleres/S02/matriz_especificaciones_S2.pdf  one problem per subject, skill per problem
+#   clases/libreto1104|1204|1304*.pdf      subject contents and conventions
+#   talleres/SXX/soluciones_SXX.pdf        reference solutions (one method each, no points)
+
+name: MAT0004 Taller de Matemáticas
+description: >
+  Taller semanal para estudiantes de primer año (novatos) de la Facultad de Matemáticas
+  UC. Cada taller tiene 3 problemas, normalmente uno por cada curso paralelo: Introducción
+  al Cálculo, Introducción al Álgebra e Introducción a la Geometría. Los estudiantes
+  resuelven a mano y suben un escaneo. Objetivos del taller: desarrollar el análisis y el
+  razonamiento lógico-matemático, y comunicar resultados matemáticos por escrito de forma
+  clara y ordenada; el error se valora como oportunidad de aprendizaje.
+  Convención de los tres cursos: los naturales no incluyen el cero (ℕ = {1, 2, 3, ...});
+  ℕ₀ incluye el 0.
+
+subjects:
+  - id: calculo
+    name: Introducción al Cálculo (MAT1104)
+    context: >
+      Contenidos del libreto: axiomas de cuerpo y de orden de ℝ, valor absoluto, raíces y
+      promedio geométrico, desigualdades e inecuaciones, sucesiones (monotonía,
+      subsucesiones, acotamiento), axioma de Dedekind y propiedad arquimediana, límites de
+      sucesiones y álgebra de límites, convergencia de sucesiones monótonas, decimales
+      periódicos, densidad y completitud, supremo e ínfimo, límites de funciones.
+      Cuando el enunciado pide demostrar "a partir de los axiomas de cuerpo (y orden)",
+      solo se pueden usar esos axiomas (existencia, conmutatividad y asociatividad de suma
+      y producto, distributividad, neutros, inversos, tricotomía, compatibilidad del orden
+      con suma y producto) y propiedades ya demostradas a partir de ellos.
+  - id: algebra
+    name: Introducción al Álgebra (MAT1204)
+    context: >
+      Contenidos del libreto: lógica proposicional, tablas de verdad y tautologías
+      (modus ponens, modus tollens, contrapositivo, contradicción), inducción, conjuntos,
+      funciones, cardinalidad finita e infinita, relaciones de equivalencia y clases,
+      divisibilidad, operaciones binarias y grupos.
+  - id: geometria
+    name: Introducción a la Geometría (MAT1304)
+    context: >
+      Contenidos del libreto: geometría euclidiana (postulados de Euclides, congruencia y
+      criterios de congruencia, paralelismo, área, construcciones con regla y compás),
+      trigonometría, polinomios y sus raíces, números complejos, geometría cartesiana,
+      secciones cónicas e isometrías. Notación: △ABC es el triángulo de vértices A, B, C;
+      ∠ABC es el ángulo en B.
+
+reading:
+  notes:
+    - "Notación del curso: △ABC (triángulo), ∠ABC (ángulo), AB con barra = segmento, ℕ, ℕ₀, ℤ, ℚ, ℝ."
+    - "Los estudiantes numeran los problemas como \"1.\", \"P1\", \"Problema 1\" o \"1a)\"."
+
+grading:
+  rules:
+    - Valora el razonamiento, no solo el resultado final.
+    - >
+      La respuesta de referencia es UNA solución posible: acepta cualquier argumento
+      matemáticamente correcto y completo, aunque siga otro camino.
+    - Si la idea es correcta pero está incompleta, refléjalo con puntaje parcial.
+    - >
+      Distingue error de cálculo, error conceptual y falta de justificación; un resultado
+      correcto sin justificación no recibe el puntaje completo.
+    - Penaliza de manera consistente errores similares.
+    - >
+      Respeta las restricciones del enunciado (p. ej. "a partir de los axiomas",
+      "señalando qué axioma usa", "por contradicción"): usar resultados no permitidos o
+      no hacer lo pedido es falta de justificación.
+    - >
+      [illegible] marca palabras que el lector automático no pudo leer: no es un error del
+      estudiante; no lo penalices, baja `confidence`. En cambio, si la notación del propio
+      estudiante es confusa e impide seguir la solución, sí cuenta (error de notación).
+  error_types:
+    - id: conceptual
+      description: uso incorrecto de una definición, teorema o propiedad
+    - id: justificacion
+      description: pasos sin justificar, argumento incompleto o restricciones del enunciado no respetadas
+    - id: calculo
+      description: error algebraico o de cálculo con una estrategia adecuada
+    - id: notacion
+      description: notación imprecisa o presentación que dificulta seguir la solución
+    - id: incompleta
+      description: falta una parte de lo pedido o la respuesta se detiene antes de concluir
+
+feedback:
+  language: Spanish
+  address: tú
+  sentences: "2-4"
+  # GPS model from the TA guide
+  structure:
+    - name: Meta
+      question: qué se esperaba en la respuesta
+    - name: Situación actual
+      question: qué logró efectivamente el estudiante (qué hizo bien y qué está mal o incompleto)
+    - name: Siguientes pasos
+      question: qué debe hacer distinto la próxima vez
+  principles:
+    - Breve y concreto; prioriza los errores conceptuales, de argumentación, de procedimiento o de presentación que afectan el aprendizaje.
+    - Tono respetuoso, claro y constructivo; orienta el aprendizaje, no solo marca fallos.
+    - "El estudiante debe poder responder: ¿qué hice bien?, ¿qué estuvo mal o incompleto?, ¿qué tengo que hacer distinto?"
+    - Si una notación confusa impide entender la solución, dilo explícitamente.
+  good_examples:
+    - La idea general del procedimiento es correcta, pero falta justificar el paso donde aplicas la definición. Para mejorar, escribe explícitamente la propiedad o definición que estás usando en ese paso.
+    - El resultado final es correcto, pero la solución necesita más justificación en los pasos intermedios. Para mejorar, explica con mayor claridad qué propiedad o definición estás usando en cada paso importante.
+    - La estrategia de resolución es adecuada, pero hay un error en el desarrollo algebraico. Revisa ese paso y cuida que las operaciones sean consistentes con el procedimiento que planteaste.
+  forbidden:
+    - Mal.
+    - Muy mal.
+    - No se entiende nada.
+    - Está todo malo.
+    - Incorrecto.
+    - Confuso.
+    - Falta estudio.
+    - Debiste hacerlo mejor.
+    - Esto no sirve.
+    - Pésima respuesta.
+    - No sabes la materia.
+    - Otra vez lo mismo.
+  empty_answer: No respondiste esta pregunta. Intenta al menos plantear la estrategia o los primeros pasos; el avance parcial también se evalúa.
+
+# Used by `huc rubric-draft` to turn the reference solutions into criteria. The teacher's
+# solutions carry no points, so the scale per question is ours to choose.
+rubric:
+  # points_per_question: 4      # uncomment to give every question the same weight
+  max_criteria: 3
+  guidelines:
+    - Un criterio por paso esencial que un ayudante revisaría (p. ej. cada dirección de un ⇔, cada propiedad de una relación de equivalencia, el resultado final).
+    - "Valora el razonamiento: el resultado final correcto sin justificación no obtiene el puntaje máximo de su criterio."
+    - Incluye niveles intermedios para una idea correcta pero incompleta o con error de cálculo.
+    - Si el enunciado impone una restricción (axiomas, método), el criterio exige respetarla.
+
+# Approval bands of the course (presentacion2026.pdf). They apply to the semester score
+# (plus 75 % attendance); per taller they are only an indication.
+scale:
+  - label: D
+    min_percent: 75
+    description: Destacado
+  - label: A
+    min_percent: 40
+    description: Aprobado
+  - label: R
+    min_percent: 0
+    description: Reprobado

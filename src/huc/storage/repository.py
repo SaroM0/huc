@@ -25,6 +25,7 @@ class Repository(Protocol):
     def list_submissions(self, exam_id: str) -> list[Submission]: ...
     def save_grade(self, g: Grade) -> None: ...
     def get_grade(self, submission_id: str) -> Grade | None: ...
+    def list_grade_history(self, submission_id: str) -> list[Grade]: ...
 
 
 class FileRepository:
@@ -64,9 +65,18 @@ class FileRepository:
         return [s for s in self._all("submissions", Submission) if s.exam_id == exam_id]
 
     def save_grade(self, g: Grade) -> None:
-        # One grade per submission; regrading overwrites (history is a job for a real DB).
+        # Keep each run as well as the latest-result pointer used by existing clients.
+        history = self._root / "grade_history" / g.submission_id
+        history.mkdir(parents=True, exist_ok=True)
+        with (history / f"{g.id}.json").open("x", encoding="utf-8") as output:
+            output.write(g.model_dump_json(indent=2))
         self._write("grades", g.submission_id, g)
 
     def get_grade(self, submission_id: str) -> Grade | None:
         path = self._root / "grades" / f"{submission_id}.json"
         return Grade.model_validate_json(path.read_text("utf-8")) if path.exists() else None
+
+    def list_grade_history(self, submission_id: str) -> list[Grade]:
+        directory = self._root / "grade_history" / submission_id
+        grades = [Grade.model_validate_json(p.read_text("utf-8")) for p in directory.glob("*.json")]
+        return sorted(grades, key=lambda grade: grade.created_at)

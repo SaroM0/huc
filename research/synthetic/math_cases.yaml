@@ -1,0 +1,49 @@
+# Synthetic research cases, not student submissions or empirical ground truth.
+exam:
+  id: synthetic-linear
+  title: Ecuación lineal sintética
+  profile:
+    name: Matemática básica
+    grading:
+      rules:
+        - Evalúa el procedimiento y el resultado de forma separada.
+        - Acepta cualquier procedimiento matemáticamente válido.
+        - Un resultado correcto con razonamiento inválido no justifica el procedimiento.
+    feedback:
+      principles:
+        - Identifica el paso específico y explica cómo mejorarlo.
+  questions:
+    - id: q1
+      number: '1'
+      type: short_answer
+      prompt: Resuelve 2x + 3 = 11 y justifica tus pasos.
+      criteria:
+        - id: reasoning
+          description: Justifica la solución por cualquier método válido; un despeje mediante operaciones equivalentes o una verificación con unicidad son suficientes, sin exigir ambos métodos.
+          max_points: 2
+          levels: {'0': Inválido o ausente, '1': Idea válida incompleta, '2': Correcto y justificado}
+        - id: result
+          description: Obtiene la solución correcta x = 4.
+          max_points: 1
+          levels: {'0': Incorrecto o ausente, '1': Correcto}
+cases:
+  - id: correct_subtraction
+    answer: 'Resto 3 a ambos lados: 2x = 8. Divido ambos lados por 2: x = 4.'
+    expected: {reasoning: [2, 2], result: [1, 1]}
+    focus: Reconocer cada transformación válida.
+  - id: correct_substitution
+    answer: 'Con x = 4, 2(4) + 3 = 11. Como 2x + 3 es estrictamente creciente, esta es la única solución.'
+    expected: {reasoning: [2, 2], result: [1, 1]}
+    focus: Aceptar un método diferente al despeje.
+  - id: correct_result_bad_reasoning
+    answer: 'De 2x + 3 = 11 concluyo que 2x = 4; por tanto x = 4.'
+    expected: {reasoning: [0, 0], result: [1, 1]}
+    focus: Señalar que 2x = 4 no se deduce de la ecuación, aunque x = 4 sea correcto.
+  - id: calculation_error
+    answer: 'Resto 3 a ambos lados y obtengo 2x = 6; divido entre 2 y obtengo x = 3.'
+    expected: {reasoning: [1, 1], result: [0, 0]}
+    focus: Identificar el error 11 - 3 = 6, sin descartar la estrategia de despeje.
+  - id: incomplete
+    answer: 'Resto 3 a ambos lados y obtengo 2x = 8.'
+    expected: {reasoning: [1, 1], result: [0, 0]}
+    focus: Reconocer el avance y explicar el paso pendiente.

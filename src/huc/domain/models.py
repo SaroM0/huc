@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from huc.domain.profile import CourseProfile
+
 
 def _id() -> str:
     return uuid4().hex
@@ -35,7 +37,7 @@ class Criterion(BaseModel):
 
     id: str
     description: str
-    max_points: float
+    max_points: float = Field(gt=0, allow_inf_nan=False)
     # Per-level descriptors, e.g. {"2": "complete and correct", "1": "partial", "0": "missing"}
     levels: dict[str, str] = Field(default_factory=dict)
 
@@ -47,6 +49,12 @@ class Question(BaseModel):
     prompt: str
     reference_answer: str | None = None
     criteria: list[Criterion] = Field(default_factory=list)
+    # Id of a subject of the exam's profile (its context is given to the grader)
+    subject: str | None = None
+    # Skill the question assesses, e.g. "Demostrar por contrapositivo"
+    skill: str | None = None
+    # Restrictions the answer must respect, e.g. "Usar solo los axiomas de cuerpo"
+    constraints: list[str] = Field(default_factory=list)
 
     @property
     def max_points(self) -> float:
@@ -58,6 +66,8 @@ class Exam(BaseModel):
     title: str
     course: str | None = None
     rubric_version: int = 1
+    # Course parameters (context, grading/feedback policy, scale); see domain/profile.py
+    profile: CourseProfile = Field(default_factory=CourseProfile)
     questions: list[Question]
 
     def question(self, question_id: str) -> Question:
@@ -78,8 +88,9 @@ class Answer(BaseModel):
     question_id: str
     text: str
     # Reading confidence (0-1): transcription + question assignment, estimated by the OCR model
-    extraction_confidence: float = 1.0
+    extraction_confidence: float = Field(default=1.0, ge=0, le=1, allow_inf_nan=False)
     source_pages: list[int] = Field(default_factory=list)
+    reading_issues: list[str] = Field(default_factory=list)
 
 
 class SubmissionStatus(StrEnum):
@@ -96,6 +107,8 @@ class Submission(BaseModel):
     source_kind: SourceKind
     source_path: str | None = None
     answers: list[Answer] = Field(default_factory=list)
+    reading_issues: list[str] = Field(default_factory=list)
+    provenance: dict = Field(default_factory=dict)
     status: SubmissionStatus = SubmissionStatus.INGESTED
     created_at: datetime = Field(default_factory=_now)
 
@@ -109,12 +122,15 @@ class CriterionScore(BaseModel):
     """Structured output of the grader agent for one criterion."""
 
     criterion_id: str
-    points: float
+    points: float = Field(allow_inf_nan=False)
     justification: str
     evidence: list[str] = Field(
         default_factory=list, description="Verbatim quotes from the answer supporting the score"
     )
     confidence: float = Field(ge=0, le=1)
+    error_type: str | None = Field(
+        default=None, description="Id of the main error type of the profile; null if none"
+    )
 
 
 class ReviewVerdict(BaseModel):
@@ -131,12 +147,30 @@ class ReviewVerdict(BaseModel):
     )
 
 
+class FeedbackAudit(BaseModel):
+    """Separate model call's fallible audit of the mathematical feedback."""
+
+    needs_verification: bool
+    issues: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0, le=1)
+
+
 class QuestionGrade(BaseModel):
     question_id: str
     scores: list[CriterionScore]
+    proposed_scores: list[CriterionScore] = Field(default_factory=list)
     review: ReviewVerdict | None = None
+    feedback_audit: FeedbackAudit | None = None
     feedback: str = ""
+    feedback_needs_review: bool = False
+    feedback_review_reasons: list[str] = Field(default_factory=list)
     graded_by: str  # model name
+
+    def requires_feedback_review(self) -> bool:
+        """Conservatively handle old records and runs without a feedback audit."""
+        return (self.feedback_needs_review or self.feedback_audit is None
+                or self.feedback_audit.needs_verification or bool(self.feedback_audit.issues)
+                or bool(self.review and self.review.needs_verification))
 
     @property
     def points(self) -> float:
@@ -152,6 +186,10 @@ class Grade(BaseModel):
     # Every exam is graded; low confidence only labels the grade for teacher verification.
     needs_verification: bool = False
     verification_reasons: list[str] = Field(default_factory=list)
+    # Snapshots make a run inspectable even if the exam or submission changes later.
+    exam_snapshot: Exam | None = None
+    submission_snapshot: Submission | None = None
+    provenance: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
     @property

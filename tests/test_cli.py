@@ -107,17 +107,23 @@ def test_grade_show_export(service, tmp_path, scan_pdf):
 
     r = run("show", sub_id)
     assert r.exit_code == 0, r.output
-    assert "Total: 6.50 / 8" in r.output
-    assert '> "2 células diploides iguales"' in r.output
-    assert f"Feedback: {FEEDBACK}" in r.output
+    assert "Total: 5.00 / 8" in r.output
+    assert "2 células diploides iguales" in r.output
+    assert f"Feedback [unflagged draft]: {FEEDBACK}" in r.output
     assert "needs teacher verification" not in r.output
 
     out = tmp_path / "grades.csv"
     assert run("export", exam_id, "--out", out).exit_code == 0
     assert out.read_text().splitlines()[0] == (
-        "student_id,status,q1,q2,total,needs_verification,verification_reasons,"
-        "q1_feedback,q2_feedback"
+        "student_id,status,q1,q2,total,percent,band,needs_verification,"
+        "verification_reasons,rubric_snapshot_mismatch,q1_errors,q2_errors,q1_feedback,q2_feedback,"
+        "q1_feedback_needs_review,q2_feedback_needs_review"
     )
+
+    r = run("report", exam_id)
+    assert r.exit_code == 0, r.output
+    assert "1/1 graded" in r.output and "Q1: mean" in r.output
+    assert '"graded": 1' in run("report", exam_id, "--json").output
 
 
 def test_low_confidence_is_labelled(service, monkeypatch, scan_pdf):
@@ -161,3 +167,16 @@ def test_grade_failure_marks_submission_failed(service, monkeypatch, scan_pdf):
     # Failed submissions are retried by the next `grade` run.
     monkeypatch.setattr(cli, "get_service", lambda: service)
     assert "Graded 1 submission(s)." in run("grade", exam_id).output
+
+
+def test_rubric_draft_writes_yaml(service, tmp_path):
+    from test_rubrics import DRAFT, make_solutions_pdf
+
+    service.llm.canned[type(DRAFT)] = DRAFT
+    pdf = make_solutions_pdf(tmp_path / "solW3.pdf", [("Taller 3, M2", ["1. x"])])
+    r = run("rubric-draft", pdf, "--out", tmp_path / "drafts")
+    assert r.exit_code == 0, r.output
+    draft = tmp_path / "drafts" / "s3-m2.yaml"
+    assert draft.is_file() and "2 questions" in r.output
+    assert run("exam-load", draft).exit_code == 0
+    assert "not in" in run("rubric-draft", pdf, "-m", "L5").output

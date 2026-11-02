@@ -6,8 +6,8 @@ import httpx
 import pytest
 from conftest import EXAMPLES, FEEDBACK, Q1_ANSWER, STUDENT, FakeLLM, FakeOCR
 
-from huc.domain.models import CriterionScore, SourceKind, SubmissionStatus
-from huc.graphs.grading import EMPTY_ANSWER_FEEDBACK, build_grading_graph
+from huc.domain.models import CriterionScore, FeedbackAudit, SourceKind, SubmissionStatus
+from huc.graphs.grading import build_grading_graph
 from huc.graphs.ingestion import build_ingestion_graph
 from huc.ocr import OcrUnavailableError
 
@@ -61,6 +61,16 @@ async def test_unknown_questions_dropped_and_student_id_override(repo, exam, sca
     sub = out["submission"]
     assert sub.student_id == "A00777"
     assert [a.question_id for a in sub.answers] == ["q1"]
+
+
+async def test_source_pages_must_match_the_scan(repo, exam, scan_pdf):
+    ocr = FakeOCR(reading={"answers": [
+        {"question_id": "q1", "text": "answer", "confidence": 1, "source_pages": [99]},
+        {"question_id": "q2", "text": "answer", "confidence": 1, "source_pages": []},
+    ]})
+    submission = (await ingest(repo, exam, scan_pdf, ocr))["submission"]
+    assert "outside the document" in submission.answers[0].reading_issues[0]
+    assert "did not identify source pages" in submission.answers[1].reading_issues[0]
 
 
 async def test_image_ingestion(repo, exam, tmp_path):
@@ -119,7 +129,8 @@ async def test_end_to_end_ingest_and_grade(repo, exam, scan_pdf):
     assert [s.criterion_id for s in grade.questions[0].scores] == [
         "products", "purpose", "variation"
     ]
-    assert not grade.needs_verification and grade.verification_reasons == []
+    assert grade.needs_verification
+    assert any("not a defined rubric level" in reason for reason in grade.verification_reasons)
     assert [q.feedback for q in grade.questions] == [FEEDBACK, FEEDBACK]
     assert repo.get_grade(submission.id).total == pytest.approx(grade.total)
     assert repo.get_submission(submission.id).status is SubmissionStatus.GRADED
@@ -151,7 +162,7 @@ async def test_low_extraction_confidence_caps_grade_confidence(repo, exam, scan_
 async def test_low_confidence_is_graded_and_labelled(repo, exam, scan_pdf):
     submission, grade = await ingest_and_grade(repo, exam, scan_pdf, FakeLLM(confidence=0.4))
     assert grade.needs_verification
-    assert len(grade.verification_reasons) == 5  # one per criterion
+    assert len(grade.verification_reasons) == 7  # five criteria and two feedback audits
     assert grade.total > 0 and all(q.feedback for q in grade.questions)
     assert repo.get_submission(submission.id).status is SubmissionStatus.GRADED
 
@@ -162,6 +173,39 @@ async def test_reviewer_can_flag_for_verification(repo, exam, scan_pdf):
     assert grade.needs_verification
     assert grade.verification_reasons == ["q1: flagged by the reviewer", "q2: flagged by the reviewer"]
     assert repo.get_submission(submission.id).status is SubmissionStatus.GRADED
+
+
+async def test_feedback_auditor_flags_mathematical_error(repo, exam, scan_pdf):
+    llm = FakeLLM()
+    llm.canned[FeedbackAudit] = FeedbackAudit(
+        needs_verification=True, issues=["The feedback endorses an invalid calculation"],
+        confidence=0.9,
+    )
+    _, grade = await ingest_and_grade(repo, exam, scan_pdf, llm)
+    assert llm.count("FeedbackAudit") == len(exam.questions)
+    assert grade.needs_verification
+    assert any("invalid calculation" in reason for reason in grade.verification_reasons)
+    assert all(q.feedback_audit is not None for q in grade.questions)
+
+
+async def test_conflicting_equations_mark_question_feedback(repo, exam, scan_pdf):
+    ocr = FakeOCR(reading={"answers": [
+        {"question_id": "q1", "text": "2x = 4; entonces x = 4.", "confidence": 1},
+    ]})
+    _, grade = await ingest_and_grade(repo, exam, scan_pdf, FakeLLM(), ocr)
+    first = grade.questions[0]
+    assert first.feedback_needs_review
+    assert any("conflicting equalities" in reason for reason in first.feedback_review_reasons)
+
+
+async def test_disabled_feedback_audit_is_flagged(repo, exam, scan_pdf):
+    from huc.config import Settings
+
+    _, grade = await ingest_and_grade(
+        repo, exam, scan_pdf, FakeLLM(), settings=Settings(feedback_audit_enabled=False)
+    )
+    assert all(q.feedback_needs_review for q in grade.questions)
+    assert any("feedback audit not performed" in reason for reason in grade.verification_reasons)
 
 
 async def test_reviewer_adjustment_is_applied_and_clamped(repo, exam, scan_pdf):
@@ -184,7 +228,8 @@ async def test_empty_answers_skip_llm(repo, exam, scan_pdf):
     assert llm.count("CriterionScore") == llm.count("ReviewVerdict") == 0
     assert all(s.justification == "Empty answer." for q in grade.questions for s in q.scores)
     assert all(q.review is None for q in grade.questions)
-    assert all(q.feedback == EMPTY_ANSWER_FEEDBACK for q in grade.questions)
+    assert all("revisa el documento original" in q.feedback for q in grade.questions)
+    assert grade.needs_verification
 
 
 async def test_injected_settings_threshold_is_used(repo, exam, scan_pdf):

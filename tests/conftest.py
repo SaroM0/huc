@@ -8,7 +8,7 @@ import pymupdf
 import pytest
 import yaml
 
-from huc.domain.models import CriterionScore, Exam, ReviewVerdict
+from huc.domain.models import CriterionScore, Exam, FeedbackAudit, ReviewVerdict
 from huc.ocr import ExamReading
 from huc.storage.repository import FileRepository
 
@@ -46,7 +46,7 @@ class FakeLLM:
 
     def __init__(
         self,
-        points: float = 1.5,
+        points: float = 1,
         confidence: float = 0.9,
         needs_verification: bool = False,
         adjusted: list[CriterionScore] | None = None,
@@ -66,7 +66,12 @@ class FakeLLM:
 
             def invoke(self, messages, *args, **kwargs):
                 fake.calls.append({"schema": schema.__name__, "messages": messages})
-                return fake._respond(schema)
+                result = fake._respond(schema)
+                if schema is CriterionScore and schema not in fake.canned:
+                    answer = messages[-1].content[0]["text"].split("<student_answer>\n", 1)[1]
+                    answer = answer.split("\n</student_answer>", 1)[0]
+                    result = result.model_copy(update={"evidence": [answer]})
+                return result
 
         return _Bound()
 
@@ -88,6 +93,8 @@ class FakeLLM:
                 adjusted_scores=self.adjusted,
                 feedback=FEEDBACK,
             )
+        if schema is FeedbackAudit:
+            return FeedbackAudit(needs_verification=False, confidence=self.confidence)
         raise AssertionError(f"unexpected schema {schema}")
 
     def count(self, schema_name: str) -> int:

@@ -7,6 +7,7 @@ Large images are downscaled to the size the OCR model actually uses.
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,10 +70,19 @@ def _fit_zoom(page: pymupdf.Page, max_side: int) -> float:
     return max_side / max(page.rect.width, page.rect.height)
 
 
-def load_pdf(path: Path, dpi: int = 200, max_side: int = MAX_SIDE_PX) -> LoadedDocument:
+def load_pdf(
+    path: Path,
+    dpi: int = 200,
+    max_side: int = MAX_SIDE_PX,
+    page_numbers: Iterable[int] | None = None,
+) -> LoadedDocument:
+    """Rasterize every page, or only `page_numbers` (1-based)."""
+    wanted = set(page_numbers) if page_numbers is not None else None
     pages: list[Page] = []
     with pymupdf.open(path) as doc:
         for i, page in enumerate(doc, start=1):
+            if wanted is not None and i not in wanted:
+                continue
             zoom = min(dpi / 72, _fit_zoom(page, max_side))
             pages.append(Page(number=i, image_b64=_b64(_render_png(page, zoom))))
     return LoadedDocument(SourceKind.PDF, path, pages)

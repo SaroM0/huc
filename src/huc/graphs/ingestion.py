@@ -11,6 +11,7 @@ Input:  {"exam_id": str, "file_path": str, "student_id": str | None}
 Output: state with "submission" (already saved).
 """
 
+import hashlib
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -22,6 +23,7 @@ from huc.config import Settings, get_settings
 from huc.domain.models import Answer, SourceKind, Submission
 from huc.ingestion import loaders
 from huc.ocr import get_ocr_model, read_exam
+from huc.prompts.ocr import read_exam_system
 from huc.storage.repository import FileRepository, Repository
 
 
@@ -58,7 +60,7 @@ def build_ingestion_graph(
 
     # -- nodes ---------------------------------------------------------------
 
-    def load_pages(state: IngestionState) -> dict:
+    async def load_pages(state: IngestionState) -> dict:
         get_repo().get_exam(state["exam_id"])  # fail before the OCR call if the exam is unknown
         settings = cfg()
         doc = loaders.load_document(
@@ -73,17 +75,34 @@ def build_ingestion_graph(
         reading = await read_exam(model, state["pages"], exam)
 
         valid_ids = {q.id for q in exam.questions}
+        ids = [a.question_id for a in reading.answers]
+        duplicates = {qid for qid in ids if ids.count(qid) > 1}
+        unknown = sorted(set(ids) - valid_ids)
+        page_numbers = {page.number for page in state["pages"]}
         submission = Submission(
             exam_id=exam.id,
             student_id=state.get("student_id") or loaders.student_id_from_path(path),
             source_kind=state["source_kind"],
             source_path=str(path),
+            provenance={"ocr_model": str(getattr(model, "model", type(model).__name__)),
+                        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "ocr_prompt": read_exam_system(exam), "pdf_dpi": cfg().pdf_dpi,
+                        "ocr_max_side_px": cfg().ocr_max_side_px},
+            reading_issues=[f"OCR returned unknown question: {qid}" for qid in unknown],
             answers=[
                 Answer(
                     question_id=a.question_id,
                     text=a.text,
                     extraction_confidence=a.confidence,
                     source_pages=a.source_pages,
+                    reading_issues=(
+                        (["OCR returned multiple answers for this question"]
+                         if a.question_id in duplicates else [])
+                        + (["OCR did not identify source pages"]
+                           if a.text.strip() and not a.source_pages else [])
+                        + (["OCR returned source pages outside the document"]
+                           if set(a.source_pages) - page_numbers else [])
+                    ),
                 )
                 for a in reading.answers
                 if a.question_id in valid_ids
@@ -91,7 +110,7 @@ def build_ingestion_graph(
         )
         return {"submission": submission}
 
-    def save(state: IngestionState) -> dict:
+    async def save(state: IngestionState) -> dict:
         get_repo().save_submission(state["submission"])
         return {}
 

@@ -1,0 +1,43 @@
+exam:
+  id: synthetic-geometry
+  title: Geometría sintética
+  profile:
+    name: Geometría cartesiana
+    grading:
+      rules:
+        - Acepta cualquier método válido, respetando las condiciones del enunciado.
+        - Distingue la estrategia de los errores de cálculo y el resultado final.
+    feedback:
+      principles:
+        - Describe el error o avance específico y un siguiente paso.
+  questions:
+    - id: q1
+      number: '1'
+      type: short_answer
+      prompt: Halla la ecuación del círculo de centro (1, 2) que pasa por (4, 6) y explica cómo la obtuviste.
+      criteria:
+        - id: reasoning
+          description: Usa correctamente las propiedades de un círculo para determinar su ecuación.
+          max_points: 2
+          levels: {'0': Inválido o ausente, '1': Estrategia válida incompleta o error de cálculo, '2': Argumento válido}
+        - id: result
+          description: Da una ecuación equivalente a (x-1)² + (y-2)² = 25.
+          max_points: 1
+          levels: {'0': Incorrecta o ausente, '1': Correcta}
+cases:
+  - id: standard
+    answer: 'El radio al cuadrado es (4-1)² + (6-2)² = 9 + 16 = 25. La ecuación es (x-1)² + (y-2)² = 25.'
+    expected: {reasoning: [2, 2], result: [1, 1]}
+    focus: Reconocer cálculo de distancia y ecuación.
+  - id: expanded
+    answer: 'La distancia al centro es 5, pues 3² + 4² = 25. Al expandir la ecuación de la circunferencia se obtiene x² + y² - 2x - 4y - 20 = 0.'
+    expected: {reasoning: [2, 2], result: [1, 1]}
+    focus: Aceptar la ecuación expandida equivalente.
+  - id: radius_error
+    answer: 'El radio es 3 + 4 = 7, por lo que (x-1)² + (y-2)² = 49.'
+    expected: {reasoning: [0, 0], result: [0, 0]}
+    focus: Explicar que la distancia euclidiana no es la suma de las diferencias.
+  - id: arithmetic_error
+    answer: 'Uso (4-1)² + (6-2)², que calculo como 24, y obtengo (x-1)² + (y-2)² = 24.'
+    expected: {reasoning: [1, 1], result: [0, 0]}
+    focus: Reconocer la estrategia y localizar el error aritmético 9 + 16.
