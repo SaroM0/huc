@@ -71,6 +71,7 @@ async def test_source_pages_must_match_the_scan(repo, exam, scan_pdf):
     submission = (await ingest(repo, exam, scan_pdf, ocr))["submission"]
     assert "outside the document" in submission.answers[0].reading_issues[0]
     assert "did not identify source pages" in submission.answers[1].reading_issues[0]
+    assert "Pages not assigned" in submission.reading_issues[0]
 
 
 async def test_image_ingestion(repo, exam, tmp_path):

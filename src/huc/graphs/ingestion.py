@@ -79,6 +79,9 @@ def build_ingestion_graph(
         duplicates = {qid for qid in ids if ids.count(qid) > 1}
         unknown = sorted(set(ids) - valid_ids)
         page_numbers = {page.number for page in state["pages"]}
+        assigned_pages = {page for answer in reading.answers if answer.question_id in valid_ids
+                          for page in answer.source_pages}
+        unassigned_pages = sorted(page_numbers - assigned_pages)
         submission = Submission(
             exam_id=exam.id,
             student_id=state.get("student_id") or loaders.student_id_from_path(path),
@@ -88,7 +91,9 @@ def build_ingestion_graph(
                         "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                         "ocr_prompt": read_exam_system(exam), "pdf_dpi": cfg().pdf_dpi,
                         "ocr_max_side_px": cfg().ocr_max_side_px},
-            reading_issues=[f"OCR returned unknown question: {qid}" for qid in unknown],
+            reading_issues=([f"OCR returned unknown question: {qid}" for qid in unknown]
+                            + ([f"Pages not assigned to any answer: {unassigned_pages}"]
+                               if unassigned_pages else [])),
             answers=[
                 Answer(
                     question_id=a.question_id,
