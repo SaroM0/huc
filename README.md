@@ -184,3 +184,46 @@ ruff check .
 
 Tests inject fake Claude and OCR models and generate scans in a temp dir, so they need
 neither network access nor an API key.
+
+## Workshop process records
+
+A workshop session preserves one student's full process for an exam independently of
+its latest grade. Create it with `POST /exams/{exam_id}/workshops` and JSON
+`{"student_id": "student-01"}`. List sessions at `GET /exams/{exam_id}/workshops`;
+retrieve the complete chronological record at `GET /workshops/{session_id}`.
+
+Append a record with `POST /workshops/{session_id}/events`, for example:
+
+```json
+{"stage": "initial_solution", "actor": "student", "text": "My initial proof..."}
+```
+
+Stages are `initial_solution`, `initial_diagnosis`, `student_question`,
+`socratic_response`, `reflection`, `final_solution`, `final_diagnosis`, and
+`teacher_note`. Each event retains server-assigned ID, timestamp and sequence. Records
+are appended through the API; there are no update/delete endpoints. Local JSON storage
+is not tamper-proof. Writes use a local filesystem lock and atomic replacement.
+
+Use `diagnosis` for structured Toulmin/SOLO observations and supporting evidence,
+`questions` for the exact socratic questions shown, `text` for questions, solutions,
+reflections or notes, and `provenance` for exact prompts, models and configuration.
+`actor` identifies who supplied the record; it is caller-provided, not authentication.
+`question_id` optionally identifies an exam question. The initial/final diagnoses are
+session-level records whose structured content can cover each question.
+
+Solutions can include `submission_id` instead of text to retain a snapshot of an existing
+OCR submission. An optional `grade_id` with that submission captures a particular grading
+run from its history. The service checks student/exam ownership and grade rubric consistency.
+The exam definition is copied when the session is created. Subsequent edits or regrading
+do not change saved event snapshots.
+
+Initial diagnosis requires the initial solution. Final solution requires the initial
+diagnosis; final diagnosis requires the final solution. Each of those stages is recorded
+once. Socratic responses require the initial diagnosis: at most three questions in the
+first response, and two in a second response after a new student question. Student
+interaction closes when the final solution is recorded. Teacher notes remain available.
+
+This feature records supplied observations and interactions; it does not yet generate
+Toulmin/SOLO diagnoses or socratic questions, and does not infer learning from changes
+between initial and final work. The existing ingestion and grading commands remain usable
+when preparing submissions and grades to attach to a session.

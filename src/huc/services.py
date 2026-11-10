@@ -18,6 +18,7 @@ from huc import rubrics
 from huc.config import Settings, get_settings
 from huc.domain.models import Exam, Grade, Submission, SubmissionStatus
 from huc.domain.profile import CourseProfile
+from huc.domain.workshop import WorkshopEntry, WorkshopEvent, WorkshopSession
 from huc.graphs.grading import build_grading_graph
 from huc.graphs.ingestion import build_ingestion_graph
 from huc.ingestion import loaders
@@ -284,3 +285,29 @@ class HucService:
                   for q in exam.questions],
             ])
         return out.getvalue()
+
+    def create_workshop(self, exam_id: str, student_id: str) -> WorkshopSession:
+        session = WorkshopSession(exam_id=exam_id, student_id=student_id,
+                                  exam_snapshot=self.repo.get_exam(exam_id).model_copy(deep=True))
+        self.repo.create_workshop(session)
+        return session
+
+    def record_workshop_event(self, session_id: str, entry: WorkshopEntry) -> WorkshopSession:
+        session = self.repo.get_workshop(session_id)
+        submission = self.repo.get_submission(entry.submission_id) if entry.submission_id else None
+        if submission and (submission.exam_id != session.exam_id
+                           or submission.student_id != session.student_id):
+            raise ValueError("Submission does not belong to this student and exam")
+        grade = None
+        if entry.grade_id:
+            if submission is None:
+                raise ValueError("A grade reference requires a submission reference")
+            grade = next((g for g in self.repo.list_grade_history(submission.id)
+                          if g.id == entry.grade_id), None)
+            if grade is None:
+                raise ValueError("Grade is not in this submission's history")
+            if grade.exam_snapshot != session.exam_snapshot:
+                raise ValueError("Grade used a different exam snapshot")
+        event = WorkshopEvent(**entry.model_dump(), sequence=0,
+                              submission_snapshot=submission, grade_snapshot=grade)
+        return self.repo.append_workshop_event(session_id, event)

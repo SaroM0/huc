@@ -8,12 +8,19 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from huc.domain.models import Exam, Grade, Submission
+from huc.domain.workshop import WorkshopEntry, WorkshopSession
 from huc.ingestion import loaders
 from huc.ocr import OcrUnavailableError
 from huc.report import ExamReport
 from huc.services import HucService
+
+
+class WorkshopCreate(BaseModel):
+    student_id: str = Field(min_length=1)
+
 
 
 @lru_cache
@@ -129,6 +136,25 @@ def create_app(service: HucService | None = None) -> FastAPI:
     async def export_csv(exam_id: str, include_flagged_feedback: bool = False,
                          svc: HucService = svc_dep) -> str:
         return svc.export_csv(exam_id, include_flagged_feedback=include_flagged_feedback)
+
+    @app.post("/exams/{exam_id}/workshops", response_model=WorkshopSession, status_code=201)
+    async def create_workshop(exam_id: str, body: WorkshopCreate,
+                              svc: HucService = svc_dep) -> WorkshopSession:
+        return svc.create_workshop(exam_id, body.student_id)
+
+    @app.get("/exams/{exam_id}/workshops", response_model=list[WorkshopSession])
+    async def list_workshops(exam_id: str, svc: HucService = svc_dep) -> list[WorkshopSession]:
+        svc.repo.get_exam(exam_id)
+        return svc.repo.list_workshops(exam_id)
+
+    @app.get("/workshops/{session_id}", response_model=WorkshopSession)
+    async def get_workshop(session_id: str, svc: HucService = svc_dep) -> WorkshopSession:
+        return svc.repo.get_workshop(session_id)
+
+    @app.post("/workshops/{session_id}/events", response_model=WorkshopSession, status_code=201)
+    async def record_event(session_id: str, body: WorkshopEntry,
+                           svc: HucService = svc_dep) -> WorkshopSession:
+        return svc.record_workshop_event(session_id, body)
 
     return app
 
