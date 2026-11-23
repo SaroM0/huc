@@ -1,5 +1,5 @@
 """Command-line interface: huc rubric-draft | exam-load | ocr | ingest | grade | show |
-report | export."""
+report | export | profile-run | profile | profile-export."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Annotated, NoReturn
 import typer
 
 from huc.domain.models import Grade
+from huc.domain.student_profile import StudentProfile
 from huc.ocr import OcrUnavailableError
 from huc.services import HucService
 
@@ -224,6 +225,83 @@ def export(
     except FileNotFoundError:
         _fail(f"exam {exam_id} not found")
     out.write_text(csv_text, "utf-8")
+    typer.echo(f"Exported to {out}")
+
+
+@app.command("profile-run")
+def profile_run(
+    exam_id: Annotated[str, typer.Argument(help="Exam ID.")],
+    force: Annotated[bool, typer.Option(help="Re-rate submissions already rated.")] = False,
+) -> None:
+    """Rate every submission of an exam on the profile's dimensions (student profile)."""
+    try:
+        runs = asyncio.run(get_service().profile_exam(exam_id, force=force))
+    except (FileNotFoundError, ValueError) as e:
+        _fail(str(e))
+    for run in runs:
+        levels = " ".join(
+            f"{o.dimension_id}={'-' if o.level is None else o.level}" for o in run.observations
+        )
+        typer.echo(f"{run.submission_id}  student={run.student_id}  {levels}")
+    typer.echo(f"Profiled {len(runs)} submission(s).")
+
+
+@app.command()
+def profile(
+    student_id: Annotated[
+        str | None, typer.Argument(help="Student ID (omit to list profiled students).")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the profile as JSON.")] = False,
+) -> None:
+    """Show a student's profile: baseline (first submission), current level and trend."""
+    svc = get_service()
+    if student_id is None:
+        students = svc.profiled_students()
+        typer.echo("\n".join(students) if students else "No profiled students yet.")
+        return
+    try:
+        prof = svc.student_profile(student_id)
+    except (FileNotFoundError, ValueError) as e:
+        _fail(str(e))
+    typer.echo(prof.model_dump_json(indent=2) if as_json else _format_profile(prof))
+
+
+def _level(value: float | None, signed: bool = False) -> str:
+    if value is None:
+        return "-"
+    return f"{value:+g}" if signed else f"{value:g}"
+
+
+def _format_profile(prof: StudentProfile) -> str:
+    labels = [p.label for p in prof.dimensions[0].series] if prof.dimensions else []
+    lines = [
+        f"Student {prof.student_id}  baseline: {prof.first_submission}  "
+        + f"submissions: {prof.submissions}  profiling v{prof.profiling_version}",
+    ]
+    lines += [f"  ! {w}" for w in prof.warnings]
+    width = max([len(d.dimension_id) for d in prof.dimensions] + [9])
+    header = f"{'dimension':<{width}}  " + "".join(f"{label:>9}" for label in labels)
+    lines += ["", header + f"{'delta':>7}  status"]
+    for d in prof.dimensions:
+        cells = "".join(
+            f"{_level(p.level) + ('?' if p.low_confidence else ''):>9}" for p in d.series
+        )
+        status = str(d.status)
+        if d.baseline_deferred and d.baseline_label:
+            status += f" (baseline {d.baseline_label})"
+        if d.low_confidence:
+            status += " [low confidence]"
+        lines.append(f"{d.dimension_id:<{width}}  {cells}{_level(d.delta, True):>7}  {status}")
+    lines += ["", "-: not observable   ?: low confidence or failed check"]
+    return "\n".join(lines)
+
+
+@app.command("profile-export")
+def profile_export(
+    out: Annotated[Path, typer.Option(help="Output CSV path.")] = Path("profiles.csv"),
+) -> None:
+    """Export every student profile as CSV (student x submission x dimension)."""
+    out.write_text(get_service().export_profiles_csv(), "utf-8")
     typer.echo(f"Exported to {out}")
 
 

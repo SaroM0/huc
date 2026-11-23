@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from huc.domain.models import Exam, Grade, Submission
+from huc.domain.student_profile import StudentProfile
 from huc.domain.workshop import WorkshopEntry, WorkshopSession
 from huc.ingestion import loaders
 from huc.ocr import OcrUnavailableError
@@ -136,6 +137,38 @@ def create_app(service: HucService | None = None) -> FastAPI:
     async def export_csv(exam_id: str, include_flagged_feedback: bool = False,
                          svc: HucService = svc_dep) -> str:
         return svc.export_csv(exam_id, include_flagged_feedback=include_flagged_feedback)
+
+    @app.post(
+        "/exams/{exam_id}/profile",
+        status_code=202,
+        summary="Rate the submissions of an exam on the profile dimensions (in the background)",
+    )
+    async def profile_exam(exam_id: str, background: BackgroundTasks, force: bool = False,
+                           svc: HucService = svc_dep) -> dict:
+        if not svc.repo.get_exam(exam_id).profile.profiling.dimensions:
+            raise ValueError(f"Exam {exam_id} has no profiling dimensions")
+        background.add_task(svc.profile_exam, exam_id, force=force)
+        return {"status": "queued"}
+
+    @app.get("/students", response_model=list[str], summary="List profiled students")
+    async def list_students(svc: HucService = svc_dep) -> list[str]:
+        return svc.profiled_students()
+
+    @app.get(
+        "/students/{student_id}/profile",
+        response_model=StudentProfile,
+        summary="Student profile: baseline, current level and trend per dimension",
+    )
+    async def student_profile(student_id: str, svc: HucService = svc_dep) -> StudentProfile:
+        return svc.student_profile(student_id)
+
+    @app.get(
+        "/profiles/export.csv",
+        response_class=PlainTextResponse,
+        summary="Export every student profile as CSV",
+    )
+    async def export_profiles(svc: HucService = svc_dep) -> str:
+        return svc.export_profiles_csv()
 
     @app.post("/exams/{exam_id}/workshops", response_model=WorkshopSession, status_code=201)
     async def create_workshop(exam_id: str, body: WorkshopCreate,

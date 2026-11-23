@@ -2,7 +2,8 @@
   "dependencies": ["."],
   "graphs": {
     "ingestion": "./src/huc/graphs/ingestion.py:graph",
-    "grading": "./src/huc/graphs/grading.py:graph"
+    "grading": "./src/huc/graphs/grading.py:graph",
+    "profiling": "./src/huc/graphs/profiling.py:graph"
   },
   "env": ".env"
 }

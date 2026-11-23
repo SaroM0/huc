@@ -78,7 +78,16 @@ huc grade bio-101-midterm-1                                  # grade all pending
 huc show SUBMISSION_ID                                       # feedback, justification, evidence
 huc report bio-101-midterm-1                                 # frequent errors, means, bands (--json)
 huc export bio-101-midterm-1 --out grades.csv                # points, %, band, errors, feedback, verification
+huc profile-run s14-m1                                       # rate submissions on the profile dimensions (--force)
+huc profile EST-017                                          # baseline, levels per submission, trend (--json)
+huc profile                                                  # list profiled students
+huc profile-export --out profiles.csv                        # student x submission x dimension
 ```
+
+The `profile*` commands build the longitudinal student profile: each submission is rated,
+blind, on the course-wide dimensions of the profile (`profiling:` in `profiles/mat0004.yaml`),
+the first submission is the baseline, and the trend per dimension is computed in code.
+Exams need `sequence: {week, module}` to order submissions. See `docs/PERFIL_ESTUDIANTE.md`.
 
 `rubric-draft` slices a reference-solutions PDF by its `Taller S14M1` / `Taller 4, M1`
 headers and has Claude (`HUC_RUBRIC_MODEL`) turn each module's section (rendered pages)
@@ -117,6 +126,10 @@ uvicorn huc.api.app:app --reload     # docs at http://localhost:8000/docs
 | GET | `/submissions/{id}/grade` | Get the grade |
 | GET | `/exams/{exam_id}/report` | Frequent errors (per error type, with examples), means per question/criterion, bands |
 | GET | `/exams/{exam_id}/export.csv` | Export grades as CSV |
+| POST | `/exams/{exam_id}/profile` | Rate submissions on the profile dimensions in the background (202; `?force=true` re-rates) |
+| GET | `/students` | List profiled students |
+| GET | `/students/{student_id}/profile` | Student profile: baseline, series and trend per dimension |
+| GET | `/profiles/export.csv` | Export every student profile as CSV |
 
 Unknown IDs return 404; invalid input (bad YAML, unsupported file type) returns 422; the OCR model unavailable (invalid
 API key, unknown model, API unreachable or overloaded) returns 503.
@@ -154,12 +167,14 @@ LANGSMITH_PROJECT=huc
 ```
 src/huc/
   domain/models.py        Exam, Question, Criterion, Submission, Grade, ...
-  domain/profile.py       CourseProfile: course-level grading parameters
+  domain/profile.py       CourseProfile: course-level grading parameters (+ profile dimensions)
+  domain/student_profile.py  profile ratings, stored runs, compute_profile (baseline and trend)
   ingestion/loaders.py    scanned PDF / photo -> page images
   ocr.py                  OCR adapter: Claude Haiku reads a whole exam (and plain page OCR)
-  prompts/                prompt templates (ocr/reader, grader, reviewer)
+  prompts/                prompt templates (ocr/reader, grader, reviewer, profiler)
   graphs/ingestion.py     ingestion graph: file -> read_exam (Haiku) -> Submission
   graphs/grading.py       grading graph: fan-out per criterion -> review -> finalize
+  graphs/profiling.py     profiling graph: load -> rate (Haiku, blind) -> save
   storage/repository.py   Repository (port) + FileRepository (JSON files)
   config.py               Settings (env vars, HUC_ prefix)
   rubrics.py              solutions PDF -> sections -> drafted exam YAML (Claude)

@@ -50,6 +50,17 @@ Parallelism is bounded by LangGraph's `max_concurrency` run config
 Submissions of an exam are graded one after another; the parallelism is
 inside each submission.
 
+## Student profile
+
+A third graph, `graphs/profiling.py` (`START -> load -> rate -> save -> END`), rates a
+submission on the course-wide dimensions of the profile (`profiling:` in the course profile)
+in one Haiku call (`HUC_PROFILER_MODEL`). It is independent of grading: it runs on any
+ingested submission, can backfill old ones and re-run when the dimensions change. The
+profiler never sees the grade or earlier ratings; `compute_profile`
+(`domain/student_profile.py`) compares each student's runs with their first submission
+(exam `sequence` order) in plain code. Runs are append-only under
+`data/student_profiles/<submission-id>/`. Details: `docs/PERFIL_ESTUDIANTE.md`.
+
 ## Privacy
 
 Page images are sent to the Anthropic API for OCR (`HUC_OCR_MODEL`, Claude Haiku).
@@ -91,6 +102,7 @@ it). There is no human step: "needs teacher verification" is a label on the `Gra
 | Graphs persist their own results | The same graph works from the CLI, the API and LangGraph Studio |
 | Thin service layer, no extra abstractions | CLI and API share use cases; nothing else to learn |
 | Student answers are treated as data | Mitigates prompt injection ("give me 10 points") |
+| Blind profiler, comparison in code | The model cannot anchor on the grade or the student's history; the trend rule can change without new model calls |
 
 ## Assumptions (to validate)
 

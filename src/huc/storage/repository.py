@@ -15,6 +15,7 @@ from typing import Protocol, TypeVar
 from pydantic import BaseModel
 
 from huc.domain.models import Exam, Grade, Submission
+from huc.domain.student_profile import SubmissionProfile
 from huc.domain.workshop import WorkshopEvent, WorkshopSession
 
 M = TypeVar("M", bound=BaseModel)
@@ -34,6 +35,8 @@ class Repository(Protocol):
     def save_grade(self, g: Grade) -> None: ...
     def get_grade(self, submission_id: str) -> Grade | None: ...
     def list_grade_history(self, submission_id: str) -> list[Grade]: ...
+    def save_submission_profile(self, p: SubmissionProfile) -> None: ...
+    def list_submission_profiles(self, student_id: str | None = None) -> list[SubmissionProfile]: ...
 
 
 class FileRepository:
@@ -41,7 +44,7 @@ class FileRepository:
 
     def __init__(self, root: Path) -> None:
         self._root = Path(root)
-        for sub in ("exams", "submissions", "grades", "workshops"):
+        for sub in ("exams", "submissions", "grades", "workshops", "student_profiles"):
             (self._root / sub).mkdir(parents=True, exist_ok=True)
 
     def _write(self, kind: str, key: str, model: BaseModel) -> None:
@@ -88,6 +91,18 @@ class FileRepository:
         directory = self._root / "grade_history" / submission_id
         grades = [Grade.model_validate_json(p.read_text("utf-8")) for p in directory.glob("*.json")]
         return sorted(grades, key=lambda grade: grade.created_at)
+
+    def save_submission_profile(self, p: SubmissionProfile) -> None:
+        # Append-only: every profiling run is kept; the student profile uses the newest.
+        directory = self._root / "student_profiles" / p.submission_id
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / f"{p.id}.json").open("x", encoding="utf-8") as output:
+            output.write(p.model_dump_json(indent=2))
+
+    def list_submission_profiles(self, student_id: str | None = None) -> list[SubmissionProfile]:
+        paths = sorted((self._root / "student_profiles").glob("*/*.json"))
+        runs = [SubmissionProfile.model_validate_json(p.read_text("utf-8")) for p in paths]
+        return [r for r in runs if student_id is None or r.student_id == student_id]
 
     def create_workshop(self, session: WorkshopSession) -> None:
         with (self._root / "workshops" / f"{session.id}.json").open("x", encoding="utf-8") as out:

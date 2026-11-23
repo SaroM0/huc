@@ -145,3 +145,113 @@ scale:
   - label: R
     min_percent: 0
     description: Reprobado
+
+# Student profile (docs/PERFIL_ESTUDIANTE.md): every submission is rated on these
+# course-wide dimensions; the baseline of each student is their first submission.
+# Sources: objectives (presentacion2026.pdf), TA guide, "Orientaciones generales" of the
+# feedback in talleres/S09 L5, and the grading criteria of the three libretos.
+# Changing a dimension or anchor changes the comparison scheme: bump `version`.
+profiling:
+  version: 1
+  baseline: first_submission
+  min_change: 1
+  levels:
+    "1": incipiente
+    "2": en desarrollo
+    "3": logrado
+    "4": destacado
+  dimensions:
+    - id: justificacion
+      name: Justificación de los pasos
+      description: >
+        Cada paso se apoya en un axioma, definición, teorema o hipótesis, nombrado o
+        claramente identificable, y respeta las restricciones del enunciado ("a partir de
+        los axiomas", "usando la propiedad arquimediana").
+      not_this: El orden de la redacción (comunicacion) ni el método global (estructura_logica).
+      anchors:
+        "1": Afirma resultados o encadena fórmulas sin indicar por qué valen.
+        "2": Justifica algunos pasos; deja sin justificar pasos clave o usa resultados no permitidos.
+        "3": Justifica los pasos esenciales; faltan detalles menores.
+        "4": Cada paso relevante indica qué usa y por qué aplica en ese punto.
+      error_types: [justificacion]
+
+    - id: estructura_logica
+      name: Estructura lógica
+      description: >
+        Distingue hipótesis de tesis, usa un método válido (directo, contrapositivo,
+        contradicción, inducción, doble inclusión), prueba ambas direcciones de un ⇔ y no
+        asume lo que debe demostrar.
+      not_this: >
+        El nombre del método: llamar "por contradicción" a una demostración por
+        contrapositivo no se penaliza (libreto de Álgebra).
+      anchors:
+        "1": Argumento circular, demuestra la recíproca o no hay una línea de razonamiento identificable.
+        "2": Hay una estrategia, pero falta una dirección, el caso base o el cierre del argumento.
+        "3": Estructura válida y completa, con pequeñas imprecisiones.
+        "4": "Estructura válida y explícita: anuncia método y objetivo, y cierra cada parte."
+
+    - id: dominio_conceptual
+      name: Dominio conceptual
+      description: >
+        Usa las definiciones y los resultados correctos, no confunde objetos (función y
+        valor, inversa e imagen inversa, condición necesaria y suficiente) y usa la
+        definición cuando se pide.
+      not_this: Omitir la cita de una definición que sí usó bien (justificacion).
+      anchors:
+        "1": Usa una definición o un resultado incorrecto, o confunde los objetos centrales del problema.
+        "2": Conoce las definiciones, pero las aplica mal en un punto importante o usa un atajo no permitido en vez de la definición pedida.
+        "3": Usa correctamente las definiciones y resultados, con una imprecisión menor.
+        "4": Escribe y aplica con exactitud las definiciones relevantes y distingue con claridad los objetos.
+      error_types: [conceptual]
+
+    - id: generalidad
+      name: Generalidad y completitud
+      description: >
+        No generaliza desde casos particulares, cubre todos los casos y configuraciones
+        (también las que el dibujo no muestra), trata los casos especiales y responde todo
+        lo pedido.
+      not_this: Omitir una dirección de un ⇔ (estructura_logica).
+      anchors:
+        "1": Concluye a partir de ejemplos o de un dibujo particular, o deja sin responder buena parte de lo pedido.
+        "2": El caso general está, pero omite casos especiales relevantes (división por cero, signos, configuraciones) o una parte de lo pedido.
+        "3": Cubre el caso general y casi todos los casos especiales.
+        "4": Identifica y trata explícitamente todos los casos y responde todo lo pedido.
+      error_types: [incompleta]
+
+    - id: precision_simbolica
+      name: Precisión simbólica
+      description: >
+        Define cada letra antes de usarla, respeta el orden de los cuantificadores, niega
+        correctamente y no reutiliza una variable con dos significados.
+      not_this: >
+        La legibilidad de la letra manuscrita ni lo que el lector automático no pudo leer
+        ([illegible] no cuenta contra el estudiante).
+      anchors:
+        "1": Variables sin introducir o con doble significado, o cuantificadores o negaciones que cambian el sentido.
+        "2": La notación es en general correcta, con imprecisiones que obligan a adivinar en algún punto.
+        "3": Notación correcta y variables introducidas; deslices menores sin consecuencias.
+        "4": Notación precisa y consistente; cada objeto se introduce con su dominio.
+      error_types: [notacion]
+
+    - id: comunicacion
+      name: Comunicación escrita
+      description: >
+        Desarrollo ordenado, símbolos acompañados de frases y conectores, modelo o dibujo
+        descrito antes de calcular, y conclusión explícita (objetivo principal 3 del taller).
+      not_this: La validez del argumento (estructura_logica) ni la ortografía.
+      anchors:
+        "1": Fórmulas sueltas sin texto; no se puede seguir el razonamiento.
+        "2": Se puede seguir con esfuerzo; faltan conectores o conclusión, o el orden es irregular.
+        "3": Ordenada y legible, con frases que conectan los pasos y una conclusión.
+        "4": "Se lee como un texto matemático: plantea, desarrolla y concluye explícitamente lo pedido."
+
+    - id: procedimiento
+      name: Corrección procedimental
+      description: Álgebra, desigualdades y cálculos sin errores, con una estrategia adecuada.
+      not_this: Elegir una estrategia equivocada (estructura_logica o dominio_conceptual).
+      anchors:
+        "1": Errores de cálculo que invalidan el resultado en varios puntos.
+        "2": Un error que afecta el resultado, o varios deslices menores.
+        "3": Cálculos correctos con un desliz menor que no afecta la conclusión.
+        "4": Cálculos correctos y verificados.
+      error_types: [calculo]

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     reviewer_model: str = "claude-haiku-5-5"
     feedback_auditor_model: str = "claude-haiku-5-5"
     feedback_audit_enabled: bool = True
+    # Rates each submission on the profile's dimensions (student profile)
+    profiler_model: str = "claude-haiku-5-5"
     # Drafts exam YAMLs (questions + rubric) from reference-solution PDFs
     rubric_model: str = "claude-haiku-5-5"
     # Output budget and thinking mode of the grader/reviewer/rubric calls

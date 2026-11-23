@@ -16,11 +16,18 @@ import yaml
 
 from huc import rubrics
 from huc.config import Settings, get_settings
-from huc.domain.models import Exam, Grade, Submission, SubmissionStatus
+from huc.domain.models import Exam, ExamSequence, Grade, Submission, SubmissionStatus
 from huc.domain.profile import CourseProfile
+from huc.domain.student_profile import (
+    StudentProfile,
+    SubmissionProfile,
+    compute_profile,
+    latest_runs,
+)
 from huc.domain.workshop import WorkshopEntry, WorkshopEvent, WorkshopSession
 from huc.graphs.grading import build_grading_graph
 from huc.graphs.ingestion import build_ingestion_graph
+from huc.graphs.profiling import build_profiling_graph
 from huc.ingestion import loaders
 from huc.llm import get_chat_model
 from huc.ocr import get_ocr_model, transcribe_page
@@ -46,6 +53,7 @@ class HucService:
         self.ocr = ocr
         self.ingestion_graph = build_ingestion_graph(repo=repo, settings=self.settings, ocr=ocr)
         self.grading_graph = build_grading_graph(repo=repo, llm=llm, settings=self.settings)
+        self.profiling_graph = build_profiling_graph(repo=repo, llm=llm, settings=self.settings)
 
     @classmethod
     def default(cls) -> HucService:
@@ -131,6 +139,8 @@ class HucService:
                 model, section, pages, profile,
                 exam_id=exam_id, title=f"Taller S{week or '?'} {module}",
             )
+            if week:
+                exam.sequence = ExamSequence(week=week, module=module)
             source = f"{path.name}, section '{section.header}', pages {section.pages}"
             drafts.append(
                 (exam, rubrics.exam_yaml(exam, profile_id=profile_id, source=source,
@@ -285,6 +295,76 @@ class HucService:
                   for q in exam.questions],
             ])
         return out.getvalue()
+
+    # -- student profile ----------------------------------------------------
+
+    async def profile_submission(self, submission_id: str) -> SubmissionProfile:
+        result = await self.profiling_graph.ainvoke({"submission_id": submission_id})
+        return result["profile"]
+
+    async def profile_exam(self, exam_id: str, *, force: bool = False) -> list[SubmissionProfile]:
+        """Rate every submission of an exam on the profile dimensions. Submissions already
+        rated with the current dimensions are skipped unless `force`."""
+        exam = self.repo.get_exam(exam_id)
+        policy = exam.profile.profiling
+        if not policy.dimensions:
+            raise ValueError(f"Profile {exam.profile.id!r} has no profiling dimensions")
+        current = policy.dimensions_hash()
+        done = {r.submission_id for r in latest_runs(self.repo.list_submission_profiles())
+                if r.dimensions_hash == current}
+        pending = [s for s in self.repo.list_submissions(exam_id)
+                   if force or s.id not in done]
+        return [await self.profile_submission(s.id) for s in pending]
+
+    def _profiling_policy(self, runs: list[SubmissionProfile]):
+        """Dimensions of the newest run's exam (the scheme the profile is compared in)."""
+        newest = max(runs, key=lambda r: r.created_at)
+        return self.repo.get_exam(newest.exam_id).profile
+
+    def student_profile(self, student_id: str) -> StudentProfile:
+        runs = self.repo.list_submission_profiles(student_id)
+        if not runs:
+            raise FileNotFoundError(f"No profiled submissions for student {student_id}")
+        profile = self._profiling_policy(runs)
+        threshold = profile.grading.verification_threshold
+        return compute_profile(
+            student_id,
+            runs,
+            [(d.id, d.name) for d in profile.profiling.dimensions],
+            min_change=profile.profiling.min_change,
+            confidence_threshold=(self.settings.verification_threshold
+                                  if threshold is None else threshold),
+        )
+
+    def profiled_students(self) -> list[str]:
+        return sorted({r.student_id for r in self.repo.list_submission_profiles()})
+
+    def export_profiles_csv(self) -> str:
+        """One row per student x submission x dimension, in each student's order."""
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow([
+            "student_id", "dimension_id", "submission_id", "exam_id", "label", "level",
+            "baseline_level", "baseline_label", "baseline_deferred", "delta", "status",
+            "confidence", "low_confidence", "error_count", "issues",
+        ])
+        for student_id in self.profiled_students():
+            profile = self.student_profile(student_id)
+            for trend in profile.dimensions:
+                for point in trend.series:
+                    writer.writerow([
+                        student_id, trend.dimension_id, point.submission_id, point.exam_id,
+                        point.label, "" if point.level is None else point.level,
+                        "" if trend.baseline_level is None else trend.baseline_level,
+                        trend.baseline_label or "", trend.baseline_deferred,
+                        "" if point.delta is None else point.delta, trend.status,
+                        point.confidence, point.low_confidence,
+                        "" if point.error_count is None else point.error_count,
+                        "; ".join(point.issues),
+                    ])
+        return out.getvalue()
+
+    # -- workshops ------------------------------------------------------------
 
     def create_workshop(self, exam_id: str, student_id: str) -> WorkshopSession:
         session = WorkshopSession(exam_id=exam_id, student_id=student_id,

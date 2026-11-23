@@ -204,6 +204,8 @@ def _num(x: float) -> float | int:
 def exam_yaml(exam: Exam, *, profile_id: str | None, source: str, model: str) -> str:
     """The exam as a YAML draft that `huc exam-load` accepts (profile by id, not inlined)."""
     data: dict = {"id": exam.id, "title": exam.title, "rubric_version": 1}
+    if exam.sequence:
+        data["sequence"] = exam.sequence.model_dump(exclude_none=True)
     if profile_id:
         data["profile"] = profile_id
     questions = []

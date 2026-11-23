@@ -61,10 +61,33 @@ class Question(BaseModel):
         return sum(c.max_points for c in self.criteria)
 
 
+# Day of a module code (L5 = lunes, M1 = martes, W6 = miércoles), in week order.
+DAY_ORDER = {"L": 0, "M": 1, "W": 2}
+
+
+class ExamSequence(BaseModel):
+    """When the exam was taken within the course, to order a student's submissions."""
+
+    week: int = Field(ge=0)
+    # Module code, e.g. "M1"; several tallers share a week, ordered by day then module.
+    module: str | None = Field(default=None, pattern=r"^[A-Za-z]\d*$")
+
+    @property
+    def key(self) -> tuple[int, int, str]:
+        module = (self.module or "").upper()
+        return (self.week, DAY_ORDER.get(module[:1], len(DAY_ORDER)), module)
+
+    @property
+    def label(self) -> str:
+        return f"S{self.week:02d}" + (f" {self.module.upper()}" if self.module else "")
+
+
 class Exam(BaseModel):
     id: str = Field(default_factory=_id)
     title: str
     course: str | None = None
+    # Position in the course; orders each student's submissions for the student profile.
+    sequence: ExamSequence | None = None
     rubric_version: int = 1
     # Course parameters (context, grading/feedback policy, scale); see domain/profile.py
     profile: CourseProfile = Field(default_factory=CourseProfile)

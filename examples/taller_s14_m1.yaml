@@ -3,6 +3,8 @@ id: s14-m1
 title: Taller S14 M1
 course: Matemáticas
 rubric_version: 2
+# Week and module: orders each student's submissions (student profile)
+sequence: {week: 14, module: M1}
 # Course context, grading/feedback policy and scale: profiles/mat0004.yaml
 profile: mat0004
 questions:
